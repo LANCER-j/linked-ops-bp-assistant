@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.build_tools/
+build/
+发布版本/
+测试文件/
+assets/avatars/
+assets/ui/ak-class-icons-solid.ttf
+assets/ui/profession_reference.png
+*.bprace
+*.bpselect
+*.bpmatch
+*.csv~
+*.log
