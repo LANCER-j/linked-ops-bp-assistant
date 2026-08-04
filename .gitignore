@@ -13,3 +13,6 @@ assets/ui/profession_reference.png
 *.bpmatch
 *.csv~
 *.log
+
+# Local visual-review and monitoring artifacts
+*_任务监测报告_*.docx
