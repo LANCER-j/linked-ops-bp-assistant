@@ -26,21 +26,54 @@ from .ui import (
 )
 
 
+# Player edition design tokens: a restrained "night operations" palette.
+# These intentionally override the shared host-console colors imported above so
+# this application can evolve independently without changing the main program.
 FONT = "Microsoft YaHei UI"
-HEADER_BG = "#0f1216"
-GLOBAL_CARD = "#242529"
-GLOBAL_BORDER = "#747982"
-BLUE_CARD = "#20364d"
-BLUE_BORDER = "#4ea1ff"
-RED_CARD = "#45282b"
-RED_BORDER = "#ff6961"
+BG = "#09111B"
+HEADER_BG = "#070D14"
+PANEL = "#101C29"
+SURFACE = "#0D1722"
+SURFACE_RAISED = "#192A3A"
+LINE = "#283A4D"
+FG = "#F3F7FC"
+MUTED = "#91A3B7"
+ACCENT = "#F0B44C"
+ACCENT_HOVER = "#FFD173"
+ACCENT_SOFT = "#6B542C"
+BLUE = "#5AAEFF"
+RED = "#FF737B"
+BAN_BADGE = "#FF8B72"
+BAN_CARD = "#35232A"
+BAN_BORDER = "#E26F72"
+GLOBAL_CARD = "#202B37"
+GLOBAL_BORDER = "#718399"
+BLUE_CARD = "#142E45"
+BLUE_BORDER = "#5AAEFF"
+RED_CARD = "#3A222A"
+RED_BORDER = "#FF737B"
+HOVER_BORDER = "#A9BCD0"
+CONTROL_HOVER = "#24384B"
+CONTROL_SELECTED = "#31465B"
+DELETE_BG = "#252C36"
+DELETE_HOVER = "#41303A"
+PROFESSION_COLORS = {
+    "先锋": "#56C8B7",
+    "近卫": "#FF817A",
+    "狙击": "#69B6F2",
+    "重装": "#E7B75E",
+    "医疗": "#6ED09A",
+    "辅助": "#B892EA",
+    "术师": "#978BEF",
+    "特种": "#DE8DB8",
+}
 RARITY_COLORS = {
-    6: ("#3d2b2e", "#f4e5e3"),
-    5: ("#3d3829", "#eee3bd"),
-    4: ("#342f3e", "#e5daed"),
-    3: ("#2b3741", "#dbe7ee"),
-    2: ("#353a40", "#e5e7e9"),
-    1: ("#393e43", "#eceeef"),
+    6: ("#33262B", "#F7E9EC"),
+    5: ("#302D23", "#F1E7C8"),
+    4: ("#29263A", "#E8E0F6"),
+    3: ("#202D3B", "#DDEBFA"),
+    2: ("#202A34", "#E5EBF1"),
+    1: ("#202A34", "#E5EBF1"),
 }
 
 
@@ -181,7 +214,7 @@ class GlobalBanEditor(tk.Toplevel):
         self.available_tree.pack(side="left", fill="both", expand=True)
         available_scroll.pack(side="right", fill="y")
         self.available_tree.tag_configure(
-            "global", background="#563238", foreground="#ffd5d0"
+            "global", background="#38272E", foreground="#FFD9DC"
         )
         self.available_tree.bind("<Double-1>", lambda _e: self._add_operator())
         tk.Button(
@@ -189,8 +222,8 @@ class GlobalBanEditor(tk.Toplevel):
             text="加入全局 Ban",
             command=self._add_operator,
             bg=ACCENT,
-            fg="#171717",
-            activebackground="#ffd06f",
+            fg=HEADER_BG,
+            activebackground=ACCENT_HOVER,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -240,7 +273,7 @@ class GlobalBanEditor(tk.Toplevel):
             command=self._remove_operator,
             bg=SURFACE_RAISED,
             fg=FG,
-            activebackground="#3b4350",
+            activebackground=CONTROL_HOVER,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -277,7 +310,7 @@ class GlobalBanEditor(tk.Toplevel):
             text="加入",
             command=self._add_branch,
             bg=ACCENT,
-            fg="#171717",
+            fg=HEADER_BG,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -289,7 +322,7 @@ class GlobalBanEditor(tk.Toplevel):
             branch_box,
             bg=SURFACE,
             fg=FG,
-            selectbackground="#465367",
+            selectbackground=CONTROL_SELECTED,
             selectforeground=FG,
             relief="flat",
             bd=0,
@@ -331,7 +364,7 @@ class GlobalBanEditor(tk.Toplevel):
             text="应用到当前 BP",
             command=self._apply,
             bg=BLUE,
-            fg="#111820",
+            fg=HEADER_BG,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -344,7 +377,7 @@ class GlobalBanEditor(tk.Toplevel):
             text="应用并重新导出配置",
             command=self._apply_and_export,
             bg=ACCENT,
-            fg="#171717",
+            fg=HEADER_BG,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -507,19 +540,19 @@ class PlayerBpApplication(tk.Tk):
         style.configure(
             "Modern.Vertical.TScrollbar",
             gripcount=0,
-            background="#6b7482",
-            darkcolor="#6b7482",
-            lightcolor="#6b7482",
-            troughcolor="#242a32",
-            bordercolor="#242a32",
-            arrowcolor="#d6dae0",
+            background="#536A82",
+            darkcolor="#536A82",
+            lightcolor="#536A82",
+            troughcolor="#142231",
+            bordercolor="#142231",
+            arrowcolor="#C4D0DC",
             relief="flat",
             borderwidth=0,
-            width=16,
+            width=14,
         )
         style.map(
             "Modern.Vertical.TScrollbar",
-            background=[("active", "#9099a7"), ("pressed", ACCENT)],
+            background=[("active", "#7890A8"), ("pressed", ACCENT)],
         )
         style.configure(
             "Modern.TCombobox",
@@ -537,13 +570,13 @@ class PlayerBpApplication(tk.Tk):
             "Modern.TCombobox",
             fieldbackground=[("readonly", SURFACE_RAISED)],
             foreground=[("readonly", FG)],
-            background=[("readonly", SURFACE_RAISED), ("active", "#39414d")],
+            background=[("readonly", SURFACE_RAISED), ("active", CONTROL_HOVER)],
             arrowcolor=[("readonly", MUTED), ("active", ACCENT)],
             bordercolor=[("focus", ACCENT), ("readonly", LINE)],
         )
         self.option_add("*TCombobox*Listbox.background", SURFACE)
         self.option_add("*TCombobox*Listbox.foreground", FG)
-        self.option_add("*TCombobox*Listbox.selectBackground", "#465367")
+        self.option_add("*TCombobox*Listbox.selectBackground", CONTROL_SELECTED)
         self.option_add("*TCombobox*Listbox.selectForeground", FG)
         self.option_add("*TCombobox*Listbox.font", (FONT, 10))
         style.configure(
@@ -568,17 +601,17 @@ class PlayerBpApplication(tk.Tk):
         )
         style.map(
             "BpLarge.Treeview",
-            background=[("selected", "#5a6678")],
-            foreground=[("selected", "#ffffff")],
+            background=[("selected", CONTROL_SELECTED)],
+            foreground=[("selected", FG)],
         )
         style.map(
             "Bp.Treeview",
-            background=[("selected", "#465367")],
-            foreground=[("selected", "#ffffff")],
+            background=[("selected", CONTROL_SELECTED)],
+            foreground=[("selected", FG)],
         )
 
     def _build_header(self) -> None:
-        header = tk.Frame(self, bg=HEADER_BG, height=104)
+        header = tk.Frame(self, bg=HEADER_BG, height=108)
         header.pack(fill="x")
         header.pack_propagate(False)
         brand = tk.Frame(header, bg=HEADER_BG)
@@ -631,18 +664,26 @@ class PlayerBpApplication(tk.Tk):
             bg=HEADER_BG,
             anchor="e",
         ).pack(anchor="e", pady=(6, 0))
+        tk.Frame(self, bg=ACCENT, height=3).pack(fill="x")
 
     def _build_toolbar(self) -> None:
-        toolbar = tk.Frame(self, bg=PANEL, padx=16, pady=12)
+        toolbar = tk.Frame(
+            self,
+            bg=PANEL,
+            padx=16,
+            pady=12,
+            highlightthickness=1,
+            highlightbackground=LINE,
+        )
         toolbar.pack(fill="x", padx=14, pady=(12, 8))
         tk.Button(
             toolbar,
-            text="⇩  导入之前比赛配置",
+            text="导入比赛配置",
             command=self.import_match_config,
             bg=ACCENT,
-            fg="#171717",
-            activebackground="#ffd06f",
-            activeforeground="#171717",
+            fg=HEADER_BG,
+            activebackground=ACCENT_HOVER,
+            activeforeground=HEADER_BG,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -652,12 +693,12 @@ class PlayerBpApplication(tk.Tk):
         ).pack(side="left", padx=(0, 16))
         tk.Button(
             toolbar,
-            text="⚙  全局 Ban 管理",
+            text="全局 Ban 管理",
             command=self.open_global_ban_editor,
             bg=SURFACE_RAISED,
             fg=ACCENT,
-            activebackground="#3b4350",
-            activeforeground="#ffd06f",
+            activebackground=CONTROL_HOVER,
+            activeforeground=ACCENT_HOVER,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -676,7 +717,10 @@ class PlayerBpApplication(tk.Tk):
             bg=SURFACE_RAISED,
             fg=FG,
             insertbackground=FG,
-            selectbackground="#455168",
+            selectbackground=CONTROL_SELECTED,
+            highlightthickness=1,
+            highlightbackground=LINE,
+            highlightcolor=ACCENT,
             relief="flat",
             bd=0,
             font=(FONT, 10),
@@ -721,15 +765,24 @@ class PlayerBpApplication(tk.Tk):
         main = tk.PanedWindow(
             self,
             orient="horizontal",
-            bg=LINE,
+            bg="#1A2B3C",
             sashwidth=7,
             sashrelief="flat",
             bd=0,
             relief="flat",
         )
         main.pack(fill="both", expand=True, padx=14, pady=(0, 14))
-        self.left_panel = tk.Frame(main, bg=PANEL, bd=0)
-        self.right_panel = tk.Frame(main, bg=PANEL, bd=0, width=620)
+        self.left_panel = tk.Frame(
+            main, bg=PANEL, bd=0, highlightthickness=1, highlightbackground=LINE
+        )
+        self.right_panel = tk.Frame(
+            main,
+            bg=PANEL,
+            bd=0,
+            width=620,
+            highlightthickness=1,
+            highlightbackground=LINE,
+        )
         main.add(self.left_panel, minsize=610, stretch="always")
         main.add(self.right_panel, minsize=500, stretch="always")
         self.after_idle(
@@ -773,7 +826,14 @@ class PlayerBpApplication(tk.Tk):
         self.card_canvas.bind("<Button-4>", lambda _e: self._queue_scroll(-90))
         self.card_canvas.bind("<Button-5>", lambda _e: self._queue_scroll(90))
 
-        footer = tk.Frame(self.left_panel, bg=SURFACE, padx=12, pady=10)
+        footer = tk.Frame(
+            self.left_panel,
+            bg=SURFACE,
+            padx=12,
+            pady=10,
+            highlightthickness=1,
+            highlightbackground=LINE,
+        )
         footer.pack(fill="x", padx=10, pady=(0, 10))
         self.selection_var = tk.StringVar(value="尚未选择干员")
         tk.Label(
@@ -789,8 +849,8 @@ class PlayerBpApplication(tk.Tk):
             text="加入当前模式",
             command=self.add_selected_operator,
             bg=ACCENT,
-            fg="#171717",
-            activebackground="#ffd06f",
+            fg=HEADER_BG,
+            activebackground=ACCENT_HOVER,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -824,7 +884,7 @@ class PlayerBpApplication(tk.Tk):
                 command=lambda target=mode: self.set_mode(target),
                 bg=SURFACE_RAISED,
                 fg=color,
-                activebackground="#3b4350",
+                activebackground=CONTROL_HOVER,
                 activeforeground=color,
                 relief="flat",
                 bd=0,
@@ -843,6 +903,7 @@ class PlayerBpApplication(tk.Tk):
             highlightbackground=LINE,
         )
         imported.pack(fill="x", padx=18, pady=(10, 8))
+        tk.Frame(imported, bg=ACCENT_SOFT, height=2).pack(fill="x")
         self.branch_ban_var = tk.StringVar(value="配置分支 Ban：无")
         tk.Label(
             imported,
@@ -896,6 +957,7 @@ class PlayerBpApplication(tk.Tk):
             padx=4,
             pady=4,
         )
+        tk.Frame(section, bg=color, height=3).pack(fill="x")
         head = tk.Frame(section, bg=SURFACE, padx=10, pady=8)
         head.pack(fill="x")
         tk.Label(
@@ -909,10 +971,10 @@ class PlayerBpApplication(tk.Tk):
             head,
             text="清空",
             command=lambda target=mode: self.clear_board_group(target),
-            bg="#3a3034",
-            fg="#ffb4ae" if mode == MODE_BAN else color,
-            activebackground="#543b40",
-            activeforeground="#ffffff",
+            bg=DELETE_BG,
+            fg="#FFB8B5" if mode == MODE_BAN else color,
+            activebackground=DELETE_HOVER,
+            activeforeground=FG,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -1190,7 +1252,7 @@ class PlayerBpApplication(tk.Tk):
                 x2 - badge_width / 2 - 5,
                 y1 + 18,
                 text=status,
-                fill="#101318",
+                fill=HEADER_BG,
                 font=(FONT, 8, "bold"),
                 tags=common_tags,
             )
@@ -1227,10 +1289,33 @@ class PlayerBpApplication(tk.Tk):
             lambda _e, target=operator.operator_id: self.add_operator(target),
         )
         self.card_canvas.tag_bind(
-            tag, "<Enter>", lambda _e: self.card_canvas.configure(cursor="hand2")
+            tag,
+            "<Enter>",
+            lambda _e, target=operator.operator_id: self._set_card_hover(
+                target, True
+            ),
         )
         self.card_canvas.tag_bind(
-            tag, "<Leave>", lambda _e: self.card_canvas.configure(cursor="")
+            tag,
+            "<Leave>",
+            lambda _e, target=operator.operator_id: self._set_card_hover(
+                target, False
+            ),
+        )
+
+    def _set_card_hover(self, operator_id: str, hovering: bool) -> None:
+        self.card_canvas.configure(cursor="hand2" if hovering else "")
+        if operator_id == self.selected_operator_id:
+            return
+        border_item = self.card_border_items.get(operator_id)
+        operator = self.operators.get(operator_id)
+        if border_item is None or operator is None:
+            return
+        status, _background, border = self._operator_status(operator)
+        self.card_canvas.itemconfigure(
+            border_item,
+            outline=HOVER_BORDER if hovering else border,
+            width=2 if hovering or status else 1,
         )
 
     def select_operator(self, operator_id: str) -> None:
@@ -1276,12 +1361,19 @@ class PlayerBpApplication(tk.Tk):
     def set_mode(self, mode: str) -> None:
         self.current_mode = mode
         colors = {MODE_BAN: BAN_BADGE, MODE_BLUE: BLUE, MODE_RED: RED}
+        active_backgrounds = {
+            MODE_BAN: "#3A282D",
+            MODE_BLUE: "#173652",
+            MODE_RED: "#40242C",
+        }
         for target, button in self.mode_buttons.items():
             selected = target == mode
             button.configure(
-                bg=colors[target] if selected else SURFACE_RAISED,
-                fg="#11151a" if selected else colors[target],
-                activebackground=colors[target] if selected else "#3b4350",
+                bg=active_backgrounds[target] if selected else SURFACE_RAISED,
+                fg=colors[target],
+                activebackground=(
+                    active_backgrounds[target] if selected else CONTROL_HOVER
+                ),
             )
 
     def remove_board_item(self, mode: str) -> None:

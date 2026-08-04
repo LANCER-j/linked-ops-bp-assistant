@@ -102,7 +102,18 @@ def export_results_csv(
         if state.auction_complete:
             result = state.result()
             writer.writerow([])
-            writer.writerow(["选手", "使用成本", "未使用原价", "未使用折算", "总消耗", "完美通关"])
+            writer.writerow(
+                [
+                    "选手",
+                    "使用成本",
+                    "未使用原价",
+                    "未使用折算",
+                    "修正前总消耗",
+                    "分数修正",
+                    "最终总消耗",
+                    "完美通关",
+                ]
+            )
             for player in ("A", "B"):
                 score = result[player]
                 writer.writerow(
@@ -111,6 +122,8 @@ def export_results_csv(
                         score["used_cost"],
                         score["bench_full_cost"],
                         score["bench_weighted_cost"],
+                        score["base_total"],
+                        score["adjustment"],
                         score["total"],
                         "是" if state.perfect_clear[player] else "否",
                     ]
@@ -120,4 +133,3 @@ def export_results_csv(
 
 def operator_values(operators: Iterable[Operator], attribute: str) -> list[str]:
     return sorted({str(getattr(operator, attribute)) for operator in operators})
-

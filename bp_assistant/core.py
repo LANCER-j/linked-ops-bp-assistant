@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import hashlib
 import json
+import math
 import random
 from typing import Any
 
@@ -36,6 +37,7 @@ class MatchRules:
     max_picks_per_round: int = 7
     min_increment: int = 1
     price_cap: int = 24
+    auction_timer_seconds: int = 20
     starting_prices: dict[int, int] = field(
         default_factory=lambda: {1: 2, 2: 2, 3: 2, 4: 2, 5: 4, 6: 8}
     )
@@ -54,6 +56,8 @@ class MatchRules:
             raise RuleError("最小加价必须至少为 1 点")
         if self.price_cap < max(self.starting_prices.values()):
             raise RuleError("价格上限不能低于起拍价")
+        if not 1 <= self.auction_timer_seconds <= 600:
+            raise RuleError("拍卖计时必须在 1 到 600 秒之间")
 
     def starting_price(self, rarity: int) -> int:
         try:
@@ -194,6 +198,17 @@ class Bid:
     amount: int | None
     action: str
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    attempt: int = 1
+
+
+@dataclass
+class AuctionEvent:
+    action: str
+    player: str | None = None
+    amount: int | None = None
+    detail: str = ""
+    attempt: int = 1
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
 
 @dataclass
@@ -209,6 +224,26 @@ class AuctionItem:
     winner: str | None = None
     final_price: int | None = None
     passed_players: list[str] = field(default_factory=list)
+    attempt: int = 1
+    timeline: list[AuctionEvent] = field(default_factory=list)
+
+    def record_event(
+        self,
+        action: str,
+        *,
+        player: str | None = None,
+        amount: int | None = None,
+        detail: str = "",
+    ) -> None:
+        self.timeline.append(
+            AuctionEvent(
+                action=action,
+                player=player,
+                amount=amount,
+                detail=detail,
+                attempt=self.attempt,
+            )
+        )
 
     def place_bid(self, player: str, amount: int, rules: MatchRules) -> None:
         if self.status not in ("pending", "active"):
@@ -223,7 +258,15 @@ class AuctionItem:
         self.status = "active"
         self.current_price = amount
         self.leader = player
-        self.bids.append(Bid(player=player, amount=amount, action="bid"))
+        self.bids.append(
+            Bid(
+                player=player,
+                amount=amount,
+                action="bid",
+                attempt=self.attempt,
+            )
+        )
+        self.record_event("bid", player=player, amount=amount)
         opponent = PLAYER_B if player == PLAYER_A else PLAYER_A
         if opponent in self.passed_players:
             self.award()
@@ -236,7 +279,15 @@ class AuctionItem:
             raise RuleError("当前领先方无需放弃跟价")
         if player in self.passed_players:
             raise RuleError("该选手已经放弃过本轮出价")
-        self.bids.append(Bid(player=player, amount=None, action="pass"))
+        self.bids.append(
+            Bid(
+                player=player,
+                amount=None,
+                action="pass",
+                attempt=self.attempt,
+            )
+        )
+        self.record_event("pass", player=player)
         self.passed_players.append(player)
         if self.leader:
             self.award()
@@ -252,11 +303,34 @@ class AuctionItem:
         self.status = "sold"
         self.winner = self.leader
         self.final_price = self.current_price
+        self.record_event(
+            "sold",
+            player=self.winner,
+            amount=self.final_price,
+        )
 
     def mark_unsold(self) -> None:
         if self.leader:
             raise RuleError("已有领先出价，不能标记为流拍")
         self.status = "unsold"
+        self.record_event("unsold")
+
+    def reset_for_reauction(self) -> None:
+        if self.status not in ("sold", "unsold"):
+            raise RuleError("只能重新拍卖已完成的干员")
+        previous_result = (
+            f"{self.winner}:{self.final_price}"
+            if self.status == "sold"
+            else "unsold"
+        )
+        self.record_event("reauction", detail=previous_result)
+        self.attempt += 1
+        self.status = "pending"
+        self.current_price = None
+        self.leader = None
+        self.winner = None
+        self.final_price = None
+        self.passed_players = []
 
 
 @dataclass
@@ -280,6 +354,9 @@ class MatchState:
     )
     perfect_clear: dict[str, bool] = field(
         default_factory=lambda: {PLAYER_A: False, PLAYER_B: False}
+    )
+    score_adjustments: dict[str, float] = field(
+        default_factory=lambda: {PLAYER_A: 0.0, PLAYER_B: 0.0}
     )
     notes: str = ""
 
@@ -311,11 +388,20 @@ class MatchState:
             raise RuleError("实际上场列表中包含该选手未获得的干员")
         used_cost = sum(item.final_price or 0 for item in won if item.operator_id in used)
         bench_cost = sum(item.final_price or 0 for item in won if item.operator_id not in used)
+        base_total = used_cost + bench_cost / 2
+        try:
+            adjustment = float(self.score_adjustments.get(player, 0.0))
+        except (TypeError, ValueError) as exc:
+            raise RuleError("分数修正必须是数字") from exc
+        if not math.isfinite(adjustment):
+            raise RuleError("分数修正必须是有限数字")
         return {
             "used_cost": float(used_cost),
             "bench_full_cost": float(bench_cost),
             "bench_weighted_cost": bench_cost / 2,
-            "total": used_cost + bench_cost / 2,
+            "base_total": float(base_total),
+            "adjustment": adjustment,
+            "total": base_total + adjustment,
         }
 
     def result(self) -> dict[str, Any]:
@@ -485,6 +571,11 @@ def auction_item_from_dict(data: dict[str, Any]) -> AuctionItem:
         winner=data.get("winner"),
         final_price=data.get("final_price"),
         passed_players=data.get("passed_players", []),
+        attempt=int(data.get("attempt", 1)),
+        timeline=[
+            AuctionEvent(**event)
+            for event in data.get("timeline", [])
+        ],
     )
 
 
@@ -549,5 +640,9 @@ def state_from_dict(data: dict[str, Any]) -> MatchState:
     state.perfect_clear = data.get(
         "perfect_clear", {PLAYER_A: False, PLAYER_B: False}
     )
+    state.score_adjustments = {
+        player: float(data.get("score_adjustments", {}).get(player, 0.0))
+        for player in (PLAYER_A, PLAYER_B)
+    }
     state.notes = data.get("notes", "")
     return state

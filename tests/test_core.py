@@ -18,6 +18,13 @@ from bp_assistant.core import (
 
 
 class CoreRulesTests(unittest.TestCase):
+    def test_auction_timer_defaults_and_validation(self) -> None:
+        rules = MatchRules()
+        self.assertEqual(20, rules.auction_timer_seconds)
+        rules.validate()
+        with self.assertRaises(RuleError):
+            MatchRules(auction_timer_seconds=0).validate()
+
     def setUp(self) -> None:
         self.operators = {
             "op_a": Operator("op_a", "甲", 6, "近卫", "无畏者"),
@@ -61,10 +68,45 @@ class CoreRulesTests(unittest.TestCase):
         expected = a_items[0].final_price + a_items[1].final_price / 2
         self.assertEqual(expected, score["total"])
 
+        state.score_adjustments["A"] = -1.5
+        adjusted = state.calculate_score("A")
+        self.assertEqual(expected, adjusted["base_total"])
+        self.assertEqual(-1.5, adjusted["adjustment"])
+        self.assertEqual(expected - 1.5, adjusted["total"])
+
     def test_price_cap_is_enforced(self) -> None:
         item = AuctionItem("op_a", 1, ["A"], 8)
         with self.assertRaises(RuleError):
             item.place_bid("A", 25, self.config.rules)
+
+    def test_score_adjustment_changes_final_winner(self) -> None:
+        items = [
+            AuctionItem(
+                "op_a",
+                1,
+                ["A"],
+                8,
+                status="sold",
+                winner="A",
+                final_price=8,
+            ),
+            AuctionItem(
+                "op_d",
+                1,
+                ["B"],
+                8,
+                status="sold",
+                winner="B",
+                final_price=8,
+            ),
+        ]
+        state = MatchState(config=self.config, auction_items=items)
+        state.used_operator_ids = {"A": ["op_a"], "B": ["op_d"]}
+        state.perfect_clear = {"A": True, "B": True}
+        state.score_adjustments["B"] = 2
+        result = state.result()
+        self.assertEqual("A", result["winner"])
+        self.assertEqual(10, result["B"]["total"])
 
     def test_leading_player_can_raise_consecutively(self) -> None:
         item = AuctionItem("op_a", 1, ["A"], 8)
@@ -80,6 +122,24 @@ class CoreRulesTests(unittest.TestCase):
         item.place_bid("B", 8, self.config.rules)
         self.assertEqual("sold", item.status)
         self.assertEqual("B", item.winner)
+
+    def test_reauction_resets_price_and_preserves_timeline(self) -> None:
+        item = AuctionItem("op_a", 1, ["A"], 8)
+        item.place_bid("A", 8, self.config.rules)
+        item.award()
+        first_bid_timestamp = item.bids[0].timestamp
+
+        item.reset_for_reauction()
+
+        self.assertEqual("pending", item.status)
+        self.assertIsNone(item.current_price)
+        self.assertIsNone(item.winner)
+        self.assertEqual(2, item.attempt)
+        self.assertEqual(first_bid_timestamp, item.bids[0].timestamp)
+        self.assertEqual(
+            ["bid", "sold", "reauction"],
+            [event.action for event in item.timeline],
+        )
 
     def test_match_is_not_complete_before_all_configured_rounds(self) -> None:
         rules = MatchRules(

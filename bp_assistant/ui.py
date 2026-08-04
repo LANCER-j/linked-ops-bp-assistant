@@ -32,28 +32,41 @@ from .storage import (
 )
 
 
-BG = "#15181d"
-PANEL = "#20252c"
-PANEL_2 = "#292f37"
-FG = "#f2f3f5"
-MUTED = "#aeb5bf"
-ACCENT = "#f2b84b"
-BLUE = "#4ea1ff"
-RED = "#ff6961"
-GREEN = "#62c58f"
-SURFACE = "#171b21"
-SURFACE_RAISED = "#242a32"
-LINE = "#343c47"
-BAN_CARD = "#3a2529"
-BAN_BORDER = "#d86666"
-BAN_BADGE = "#ff8a72"
+BG = "#0A1016"
+HEADER_BG = "#070C11"
+PANEL = "#111B25"
+PANEL_2 = "#1A2733"
+FG = "#F2F0E8"
+MUTED = "#93A0AA"
+ACCENT = "#E2B45B"
+ACCENT_HOVER = "#F3CB78"
+BLUE = "#54A0E8"
+RED = "#E56B66"
+GREEN = "#58B98A"
+SURFACE = "#0D151D"
+SURFACE_RAISED = "#18232E"
+LINE = "#2A3946"
+FOCUS = "#F0C56B"
+CONTROL_HOVER = "#233441"
+CONTROL_SELECTED = "#304657"
+BAN_CARD = "#39252A"
+BAN_BORDER = "#D76E70"
+BAN_BADGE = "#F08A72"
 HOST_RARITY_COLORS = {
-    6: ("#3d2b2e", "#f4e5e3"),
-    5: ("#3d3829", "#eee3bd"),
-    4: ("#342f3e", "#e5daed"),
-    3: ("#2b3741", "#dbe7ee"),
-    2: ("#353a40", "#e5e7e9"),
-    1: ("#393e43", "#eceeef"),
+    6: ("#34262A", "#F7E9EC"),
+    5: ("#302D23", "#F1E7C8"),
+    4: ("#29263A", "#E8E0F6"),
+    3: ("#202D3B", "#DDEBFA"),
+    2: ("#202A34", "#E5EBF1"),
+    1: ("#202A34", "#E5EBF1"),
+}
+AUCTION_RARITY_ACCENTS = {
+    6: "#C96B70",
+    5: "#C7A553",
+    4: "#8573C4",
+    3: "#5D91BE",
+    2: "#A6B0B8",
+    1: "#A6B0B8",
 }
 
 PROFESSION_ICONS = {
@@ -67,6 +80,17 @@ PROFESSION_ICONS = {
     "辅助": "✦",
 }
 
+PROFESSION_ICON_NAMES = {
+    "先锋": "vanguard",
+    "近卫": "guard",
+    "狙击": "sniper",
+    "术师": "caster",
+    "医疗": "medic",
+    "重装": "defender",
+    "特种": "specialist",
+    "辅助": "supporter",
+}
+
 PROFESSION_COLORS = {
     "先锋": "#4cb8a8",
     "近卫": "#ef6c62",
@@ -77,6 +101,54 @@ PROFESSION_COLORS = {
     "术师": "#8b7ee8",
     "特种": "#d67dac",
 }
+
+
+def card_operator_name(name: str, limit: int = 18) -> str:
+    """Keep operator names on one line inside compact catalogue cards."""
+    return name if len(name) <= limit else f"{name[: limit - 1]}…"
+
+
+def card_operator_name_size(name: str, normal: int, compact: int, minimum: int) -> int:
+    length = len(name)
+    if length <= 6:
+        return normal
+    if length <= 11:
+        return compact
+    return minimum
+
+
+def draw_shadowed_card_name(
+    canvas: tk.Canvas,
+    x: float,
+    y: float,
+    *,
+    text: str,
+    font: tuple[str, int, str],
+    fill: str,
+    anchor: str,
+    tags: tuple[str, ...],
+) -> int:
+    """Draw a compact dark edge shadow before the foreground card name."""
+    for offset_x, offset_y in ((-1, 1), (1, 1), (0, 2)):
+        canvas.create_text(
+            x + offset_x,
+            y + offset_y,
+            text=text,
+            font=font,
+            fill="#03070B",
+            anchor=anchor,
+            tags=tags,
+        )
+    return canvas.create_text(
+        x,
+        y,
+        text=text,
+        font=font,
+        fill=fill,
+        anchor=anchor,
+        tags=tags,
+    )
+
 
 BRANCH_ICON_NAMES = {
     "craftsman": "artificer",
@@ -206,7 +278,10 @@ class AssetManager:
             add_font.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p]
             added = add_font(str(font_path), 0x10, None)
             if added:
-                self.branch_font_family = "ak-class-icons"
+                # Must match the TTF's internal family name exactly.  Using the
+                # shorter "ak-class-icons" name makes Tk fall back to a system
+                # font, so the private-use codepoints render as unrelated icons.
+                self.branch_font_family = "ak-class-icons-solid"
                 self.branch_font_available = True
         except (AttributeError, ImportError, OSError, TypeError, tk.TclError):
             return
@@ -217,6 +292,13 @@ class AssetManager:
         if self.branch_font_available and codepoint is not None:
             return chr(codepoint)
         return "◇"
+
+    def profession_glyph(self, profession: str) -> str:
+        icon_name = PROFESSION_ICON_NAMES.get(profession)
+        codepoint = BRANCH_ICON_CODEPOINTS.get(icon_name or "")
+        if self.branch_font_available and codepoint is not None:
+            return chr(codepoint)
+        return PROFESSION_ICONS.get(profession, "◇")
 
     def logo(self, size: int = 64) -> tk.PhotoImage:
         if size in self.logo_cache:
@@ -316,6 +398,414 @@ class AssetManager:
         return image
 
 
+class OperatorClassFilter(tk.Frame):
+    """Compact main-class rail with an expandable subclass icon matrix."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        app: "BpApplication",
+        profession_var: tk.StringVar,
+        branch_var: tk.StringVar,
+        on_change,
+    ):
+        super().__init__(parent, bg=PANEL)
+        self.app = app
+        self.profession_var = profession_var
+        self.branch_var = branch_var
+        self.on_change = on_change
+        self.branch_panel_visible = False
+        self._branch_animation_job: str | None = None
+        self._branch_layout_job: str | None = None
+        self._branch_last_width = 0
+        self.main_cells: dict[str, tuple[tk.Frame, tk.Label, tk.Label]] = {}
+        self.branch_cells: dict[str, tuple[tk.Frame, tk.Label, tk.Label]] = {}
+        self.branch_cell_widths: dict[str, int] = {}
+        self.branches_by_profession: dict[str, list[tuple[str, str]]] = {}
+        for operator in app.operators.values():
+            values = self.branches_by_profession.setdefault(
+                operator.profession, []
+            )
+            pair = (operator.branch, operator.branch_id)
+            if pair not in values:
+                values.append(pair)
+        for values in self.branches_by_profession.values():
+            values.sort(key=lambda item: item[0])
+
+        self.main_rail = tk.Frame(self, bg=PANEL)
+        self.main_rail.pack(fill="x")
+        for profession in ["全部职业"] + list(PROFESSION_ICONS):
+            self._build_main_cell(profession)
+
+        self.branch_panel = tk.Frame(
+            self,
+            bg=SURFACE,
+            highlightthickness=0,
+            padx=0,
+            pady=0,
+        )
+        self.branch_viewport = tk.Canvas(
+            self.branch_panel,
+            bg=SURFACE,
+            height=0,
+            highlightthickness=0,
+            bd=0,
+        )
+        self.branch_viewport.pack(fill="x")
+        self.branch_grid = tk.Frame(self.branch_viewport, bg=SURFACE, height=0)
+        self.branch_window = self.branch_viewport.create_window(
+            0,
+            0,
+            anchor="nw",
+            window=self.branch_grid,
+        )
+        self.branch_mask = self.branch_viewport.create_rectangle(
+            0,
+            0,
+            0,
+            0,
+            fill=SURFACE,
+            outline=SURFACE,
+            state="hidden",
+        )
+        self._branch_reveal_height = 0.0
+        self.bind("<Configure>", self._filter_resized, add="+")
+        self.refresh_selection()
+
+    @staticmethod
+    def _bind_click(widget: tk.Misc, callback) -> None:
+        widget.bind("<Button-1>", callback)
+        widget.configure(cursor="hand2")
+        for child in widget.winfo_children():
+            child.bind("<Button-1>", callback)
+            child.configure(cursor="hand2")
+
+    def _build_main_cell(self, profession: str) -> None:
+        cell = tk.Frame(
+            self.main_rail,
+            bg=SURFACE_RAISED,
+            width=76,
+            height=78,
+            highlightthickness=1,
+            highlightbackground=LINE,
+        )
+        cell.pack(side="left", padx=(0, 6))
+        cell.pack_propagate(False)
+        if profession == "全部职业":
+            glyph = "⊞"
+            icon_font = ("Segoe UI Symbol", 22)
+            title = "全部"
+        else:
+            glyph = self.app.assets.profession_glyph(profession)
+            icon_font = (self.app.assets.branch_font_family, 25)
+            title = profession
+        icon = tk.Label(
+            cell,
+            text=glyph,
+            font=icon_font,
+            fg=MUTED,
+            bg=SURFACE_RAISED,
+        )
+        icon.pack(pady=(7, 0))
+        label = tk.Label(
+            cell,
+            text=title,
+            font=("Microsoft YaHei UI", 9, "bold"),
+            fg=MUTED,
+            bg=SURFACE_RAISED,
+        )
+        label.pack(pady=(1, 6))
+        callback = lambda _event, value=profession: self.select_profession(value)
+        self._bind_click(cell, callback)
+        cell.bind(
+            "<Enter>",
+            lambda _event, value=profession: self._set_main_hover(value, True),
+        )
+        cell.bind(
+            "<Leave>",
+            lambda _event, value=profession: self._set_main_hover(value, False),
+        )
+        self.main_cells[profession] = (cell, icon, label)
+
+    def _set_main_hover(self, profession: str, hovering: bool) -> None:
+        if self.profession_var.get() == profession:
+            return
+        color = CONTROL_HOVER if hovering else SURFACE_RAISED
+        cell, icon, label = self.main_cells[profession]
+        for widget in (cell, icon, label):
+            widget.configure(bg=color)
+
+    def select_profession(self, profession: str) -> None:
+        same_profession = self.profession_var.get() == profession
+        if profession == "全部职业":
+            self.profession_var.set(profession)
+            self.branch_var.set("全部分支")
+            self.hide_branches()
+        elif same_profession:
+            if self.branch_panel_visible:
+                self.hide_branches()
+            else:
+                self.show_branches(profession)
+        else:
+            self.profession_var.set(profession)
+            self.branch_var.set("全部分支")
+            self.show_branches(profession)
+        self.refresh_selection()
+        self.on_change()
+
+    def show_branches(self, profession: str) -> None:
+        self._cancel_branch_animation()
+        self._cancel_branch_layout()
+        for widget in self.branch_grid.winfo_children():
+            widget.destroy()
+        self.branch_cells.clear()
+        self.branch_cell_widths.clear()
+        values = [("全部分支", "")] + self.branches_by_profession.get(
+            profession, []
+        )
+        for branch, branch_id in values:
+            cell = tk.Frame(
+                self.branch_grid,
+                bg=SURFACE_RAISED,
+                height=64,
+                highlightthickness=1,
+                highlightbackground=LINE,
+            )
+            cell.pack_propagate(False)
+            glyph = "□" if branch == "全部分支" else self.app.assets.branch_glyph(
+                branch_id
+            )
+            icon_font = (
+                ("Segoe UI Symbol", 18, "bold")
+                if branch == "全部分支"
+                else (
+                    self.app.assets.branch_font_family,
+                    24 if profession == "先锋" else 20,
+                )
+            )
+            icon = tk.Label(
+                cell,
+                text=glyph,
+                font=icon_font,
+                fg=MUTED,
+                bg=SURFACE_RAISED,
+            )
+            icon.pack(side="left", padx=(10, 5), pady=8)
+            title = "全部" if branch == "全部分支" else branch
+            label = tk.Label(
+                cell,
+                text=title,
+                font=("Microsoft YaHei UI", 10, "bold"),
+                fg=FG,
+                bg=SURFACE_RAISED,
+                anchor="w",
+            )
+            label.pack(side="left", padx=(0, 11), pady=8)
+            callback = lambda _event, value=branch: self.select_branch(value)
+            self._bind_click(cell, callback)
+            self.branch_cells[branch] = (cell, icon, label)
+            content_width = (
+                icon.winfo_reqwidth()
+                + label.winfo_reqwidth()
+                + 36
+            )
+            self.branch_cell_widths[branch] = max(
+                124,
+                min(210, content_width),
+            )
+        if not self.branch_panel_visible:
+            self.branch_panel.pack(fill="x", pady=0)
+        self.branch_panel_visible = True
+        self.branch_viewport.configure(height=0)
+        self.branch_viewport.coords(self.branch_window, 0, 0)
+        self._branch_reveal_height = 0.0
+        self._branch_layout_job = self.after_idle(
+            lambda: self._layout_branch_cells(animate=True)
+        )
+        self.refresh_selection()
+
+    def hide_branches(self) -> None:
+        self._cancel_branch_layout()
+        if not self.branch_panel_visible:
+            return
+
+        def finish() -> None:
+            self.branch_panel.pack_forget()
+            self.branch_panel_visible = False
+            self.branch_viewport.configure(height=0)
+            self.branch_viewport.coords(self.branch_window, 0, 0)
+            self.branch_viewport.itemconfigure(self.branch_mask, state="hidden")
+            self._branch_reveal_height = 0.0
+
+        self._animate_branch_reveal(
+            0,
+            duration_ms=130,
+            on_complete=finish,
+        )
+
+    def _filter_resized(self, event: tk.Event) -> None:
+        if not self.branch_panel_visible or abs(event.width - self._branch_last_width) < 4:
+            return
+        self._cancel_branch_layout()
+        self._branch_layout_job = self.after_idle(self._layout_branch_cells)
+
+    def _layout_branch_cells(self, animate: bool = False) -> None:
+        self._branch_layout_job = None
+        if not self.branch_panel_visible:
+            return
+        viewport_width = max(320, self.branch_viewport.winfo_width())
+        available_width = viewport_width - 16
+        if available_width <= 320:
+            viewport_width = max(320, self.winfo_width())
+            available_width = viewport_width - 16
+        self._branch_last_width = self.winfo_width()
+        gap = 6
+        row_height = 64
+        x = 8
+        y = 6
+        for branch, (cell, _icon, _label) in self.branch_cells.items():
+            width = self.branch_cell_widths[branch]
+            if x > 8 and x + width > available_width + 8:
+                x = 8
+                y += row_height + gap
+            cell.place(x=x, y=y, width=width, height=row_height)
+            x += width + gap
+        target_height = y + row_height + 6
+        self.branch_grid.configure(
+            width=viewport_width,
+            height=target_height,
+        )
+        self.branch_viewport.itemconfigure(
+            self.branch_window,
+            width=viewport_width,
+            height=target_height,
+        )
+        self.branch_viewport.configure(height=target_height)
+        if animate:
+            self.branch_viewport.coords(self.branch_window, 0, 0)
+            self._branch_reveal_height = 0.0
+            self.branch_viewport.coords(
+                self.branch_mask,
+                0,
+                0,
+                viewport_width,
+                target_height,
+            )
+            self.branch_viewport.itemconfigure(
+                self.branch_mask,
+                state="normal",
+            )
+            self.branch_viewport.tag_raise(self.branch_mask)
+            self._animate_branch_reveal(target_height, duration_ms=200)
+        else:
+            self._cancel_branch_animation()
+            self.branch_viewport.coords(self.branch_window, 0, 0)
+            self._branch_reveal_height = float(target_height)
+            self.branch_viewport.itemconfigure(self.branch_mask, state="hidden")
+
+    def _animate_branch_reveal(
+        self,
+        target_height: int,
+        *,
+        duration_ms: int,
+        on_complete=None,
+    ) -> None:
+        self._cancel_branch_animation()
+        viewport_height = int(self.branch_viewport.cget("height"))
+        window_width = self.branch_viewport.itemcget(
+            self.branch_window,
+            "width",
+        )
+        viewport_width = max(1, round(float(window_width)))
+        start_height = self._branch_reveal_height
+        distance = target_height - start_height
+        if distance == 0:
+            if on_complete:
+                on_complete()
+            return
+        self.branch_viewport.itemconfigure(self.branch_mask, state="normal")
+        self.branch_viewport.tag_raise(self.branch_mask)
+        frame_ms = 15
+        frames = max(1, round(duration_ms / frame_ms))
+
+        def tick(frame: int) -> None:
+            progress = min(1.0, frame / frames)
+            if distance > 0:
+                eased = 1.0 - (1.0 - progress) ** 3
+            else:
+                eased = progress**2
+            reveal_height = start_height + distance * eased
+            self._branch_reveal_height = reveal_height
+            self.branch_viewport.coords(
+                self.branch_mask,
+                0,
+                reveal_height,
+                viewport_width,
+                viewport_height,
+            )
+            if frame < frames:
+                self._branch_animation_job = self.after(
+                    frame_ms, lambda: tick(frame + 1)
+                )
+            else:
+                self._branch_animation_job = None
+                self._branch_reveal_height = float(target_height)
+                if target_height >= viewport_height:
+                    self.branch_viewport.itemconfigure(
+                        self.branch_mask,
+                        state="hidden",
+                    )
+                if on_complete:
+                    on_complete()
+
+        tick(1)
+
+    def _cancel_branch_animation(self) -> None:
+        if self._branch_animation_job is not None:
+            self.after_cancel(self._branch_animation_job)
+            self._branch_animation_job = None
+
+    def _cancel_branch_layout(self) -> None:
+        if self._branch_layout_job is not None:
+            self.after_cancel(self._branch_layout_job)
+            self._branch_layout_job = None
+
+    def select_branch(self, branch: str) -> None:
+        self.branch_var.set(branch)
+        self.refresh_selection()
+        self.on_change()
+
+    def refresh_selection(self) -> None:
+        selected_profession = self.profession_var.get()
+        for profession, (cell, icon, label) in self.main_cells.items():
+            selected = profession == selected_profession
+            color = (
+                ACCENT
+                if profession == "全部职业"
+                else PROFESSION_COLORS.get(profession, ACCENT)
+            )
+            background = CONTROL_SELECTED if selected else SURFACE_RAISED
+            cell.configure(
+                bg=background,
+                highlightbackground=color if selected else LINE,
+                highlightthickness=2 if selected else 1,
+            )
+            icon.configure(bg=background, fg=color if selected else MUTED)
+            label.configure(bg=background, fg=FG if selected else MUTED)
+        selected_branch = self.branch_var.get()
+        accent = PROFESSION_COLORS.get(selected_profession, ACCENT)
+        for branch, (cell, icon, label) in self.branch_cells.items():
+            selected = branch == selected_branch
+            background = CONTROL_SELECTED if selected else SURFACE_RAISED
+            cell.configure(
+                bg=background,
+                highlightbackground=accent if selected else LINE,
+                highlightthickness=2 if selected else 1,
+            )
+            icon.configure(bg=background, fg=accent if selected else MUTED)
+            label.configure(bg=background, fg=FG)
+
+
 class BpApplication(tk.Tk):
     def __init__(self, operators: dict[str, Operator], data_path: Path):
         super().__init__()
@@ -340,33 +830,33 @@ class BpApplication(tk.Tk):
         self.configure(bg=BG)
         self._configure_style()
 
-        header = tk.Frame(self, bg="#0f1216", height=112)
+        header = tk.Frame(self, bg=HEADER_BG, height=104)
         header.pack(fill="x")
         header.pack_propagate(False)
-        brand = tk.Frame(header, bg="#0f1216")
+        brand = tk.Frame(header, bg=HEADER_BG)
         brand.pack(side="left", padx=24, pady=10, fill="y")
         brand_logo = self.assets.logo(64)
         tk.Label(
             brand,
             image=brand_logo,
-            bg="#0f1216",
+            bg=HEADER_BG,
             bd=0,
         ).pack(side="left", padx=(0, 12))
-        brand_text = tk.Frame(brand, bg="#0f1216")
+        brand_text = tk.Frame(brand, bg=HEADER_BG)
         brand_text.pack(side="left", fill="y")
         tk.Label(
             brand_text,
             text="LINKED OPS",
             font=("Segoe UI", 10, "bold"),
             fg=MUTED,
-            bg="#0f1216",
+            bg=HEADER_BG,
         ).pack(anchor="w", pady=(3, 0))
         tk.Label(
             brand_text,
             text="联锁对抗控制台",
             font=("Microsoft YaHei UI", 20, "bold"),
             fg=ACCENT,
-            bg="#0f1216",
+            bg=HEADER_BG,
         ).pack(anchor="w", pady=(2, 0))
         self.status_var = tk.StringVar(value=f"本地干员数据：{len(operators)} 名")
         tk.Label(
@@ -374,8 +864,13 @@ class BpApplication(tk.Tk):
             textvariable=self.status_var,
             font=("Microsoft YaHei UI", 10),
             fg=MUTED,
-            bg="#0f1216",
+            bg=HEADER_BG,
         ).pack(side="right", padx=24)
+        analysis_rail = tk.Frame(self, bg=HEADER_BG, height=3)
+        analysis_rail.pack(fill="x")
+        for color, weight in ((RED, 2), (ACCENT, 3), (GREEN, 2)):
+            segment = tk.Frame(analysis_rail, bg=color, height=3)
+            segment.pack(side="left", fill="both", expand=weight)
 
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(8, 12))
@@ -386,11 +881,11 @@ class BpApplication(tk.Tk):
         self.settlement_tab: SettlementTab | None = None
         self._tab_order = ("setup", "host_ban", "player", "auction", "settlement")
         self._tab_specs = {
-            "setup": (SetupTab, "  ◈  比赛  "),
-            "host_ban": (HostBanTab, "  ⛨  主持人 Ban  "),
-            "player": (PlayerTab, "  ▦  选手 Pick  "),
-            "auction": (AuctionTab, "  ◆  拍卖  "),
-            "settlement": (SettlementTab, "  ∑  结算  "),
+            "setup": (SetupTab, "  比赛  "),
+            "host_ban": (HostBanTab, "  主持人 Ban  "),
+            "player": (PlayerTab, "  选手 Pick  "),
+            "auction": (AuctionTab, "  拍卖  "),
+            "settlement": (SettlementTab, "  结算  "),
         }
         self._tab_containers: dict[str, ttk.Frame] = {}
         for key in self._tab_order:
@@ -467,69 +962,116 @@ class BpApplication(tk.Tk):
         style.configure("Panel.TLabel", background=PANEL, foreground=FG)
         style.configure("Title.TLabel", background=BG, foreground=FG, font=("Microsoft YaHei UI", 18, "bold"))
         style.configure("CardTitle.TLabel", background=PANEL, foreground=ACCENT, font=("Microsoft YaHei UI", 13, "bold"))
-        style.configure("TButton", padding=(16, 10), background=PANEL_2, foreground=FG, borderwidth=0)
-        style.map("TButton", background=[("active", "#3a424d"), ("disabled", "#25282d")])
-        style.configure("Accent.TButton", background=ACCENT, foreground="#171717", font=("Microsoft YaHei UI", 11, "bold"))
-        style.map("Accent.TButton", background=[("active", "#ffd06f")])
-        style.configure("Blue.TButton", background=BLUE, foreground="#111820")
-        style.configure("Red.TButton", background=RED, foreground="#211111")
+        style.configure(
+            "TButton",
+            padding=(16, 10),
+            background=PANEL_2,
+            foreground=FG,
+            borderwidth=0,
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("active", CONTROL_HOVER),
+                ("pressed", CONTROL_SELECTED),
+                ("disabled", "#151D24"),
+            ],
+            foreground=[("disabled", "#66727C")],
+        )
+        style.configure(
+            "Accent.TButton",
+            background=ACCENT,
+            foreground=HEADER_BG,
+            font=("Microsoft YaHei UI", 11, "bold"),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", ACCENT_HOVER), ("pressed", "#C9963F")],
+        )
+        style.configure("Blue.TButton", background=BLUE, foreground=HEADER_BG)
+        style.configure("Red.TButton", background=RED, foreground=HEADER_BG)
         style.configure(
             "AuctionBlue.TButton",
             background=BLUE,
-            foreground="#111820",
+            foreground=HEADER_BG,
             font=("Microsoft YaHei UI", 16, "bold"),
             padding=(34, 18),
         )
         style.configure(
             "AuctionRed.TButton",
             background=RED,
-            foreground="#211111",
+            foreground=HEADER_BG,
             font=("Microsoft YaHei UI", 16, "bold"),
             padding=(34, 18),
         )
-        style.configure("Green.TButton", background=GREEN, foreground="#102018")
-        style.configure("TEntry", fieldbackground=SURFACE_RAISED, foreground=FG, insertcolor=FG, padding=8)
-        style.configure("TCombobox", fieldbackground=PANEL_2, background=PANEL_2, foreground=FG)
+        style.configure("Green.TButton", background=GREEN, foreground=HEADER_BG)
+        style.configure(
+            "TEntry",
+            fieldbackground=SURFACE_RAISED,
+            foreground=FG,
+            insertcolor=FG,
+            bordercolor=LINE,
+            lightcolor=LINE,
+            darkcolor=LINE,
+            padding=8,
+        )
+        style.map(
+            "TEntry",
+            bordercolor=[("focus", FOCUS)],
+            lightcolor=[("focus", FOCUS)],
+            darkcolor=[("focus", FOCUS)],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=PANEL_2,
+            background=PANEL_2,
+            foreground=FG,
+            bordercolor=LINE,
+            lightcolor=LINE,
+            darkcolor=LINE,
+            padding=(8, 7),
+        )
         style.map(
             "TCombobox",
             fieldbackground=[("readonly", SURFACE_RAISED)],
             foreground=[("readonly", FG)],
-            background=[("readonly", SURFACE_RAISED), ("active", "#39414d")],
+            background=[("readonly", SURFACE_RAISED), ("active", CONTROL_HOVER)],
             arrowcolor=[("readonly", MUTED), ("active", ACCENT)],
+            bordercolor=[("focus", FOCUS), ("readonly", LINE)],
         )
         style.configure(
             "Modern.Vertical.TScrollbar",
             gripcount=0,
-            background="#68717e",
-            darkcolor="#68717e",
-            lightcolor="#68717e",
-            troughcolor="#242a32",
-            bordercolor="#242a32",
-            arrowcolor="#d6dae0",
+            background="#536A7C",
+            darkcolor="#536A7C",
+            lightcolor="#536A7C",
+            troughcolor="#14202A",
+            bordercolor="#14202A",
+            arrowcolor="#C4CFD6",
             relief="flat",
             borderwidth=0,
-            width=16,
+            width=14,
         )
         style.map(
             "Modern.Vertical.TScrollbar",
-            background=[("active", "#8a94a2"), ("pressed", ACCENT)],
+            background=[("active", "#7890A0"), ("pressed", ACCENT)],
         )
         style.configure(
             "Vertical.TScrollbar",
             gripcount=0,
-            background="#68717e",
-            darkcolor="#68717e",
-            lightcolor="#68717e",
-            troughcolor="#242a32",
-            bordercolor="#242a32",
-            arrowcolor="#d6dae0",
+            background="#536A7C",
+            darkcolor="#536A7C",
+            lightcolor="#536A7C",
+            troughcolor="#14202A",
+            bordercolor="#14202A",
+            arrowcolor="#C4CFD6",
             relief="flat",
             borderwidth=0,
             width=15,
         )
         style.map(
             "Vertical.TScrollbar",
-            background=[("active", "#8a94a2"), ("pressed", ACCENT)],
+            background=[("active", "#7890A0"), ("pressed", ACCENT)],
         )
         style.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=FG, rowheight=28)
         style.configure(
@@ -541,7 +1083,7 @@ class BpApplication(tk.Tk):
             font=("Microsoft YaHei UI", 11),
             borderwidth=0,
         )
-        style.map("Operator.Treeview", background=[("selected", "#43566e")])
+        style.map("Operator.Treeview", background=[("selected", CONTROL_SELECTED)])
         style.configure(
             "AuctionResult.Treeview",
             background=SURFACE,
@@ -551,7 +1093,9 @@ class BpApplication(tk.Tk):
             font=("Microsoft YaHei UI", 10),
             borderwidth=0,
         )
-        style.map("AuctionResult.Treeview", background=[("selected", "#3a4655")])
+        style.map(
+            "AuctionResult.Treeview", background=[("selected", CONTROL_SELECTED)]
+        )
         style.configure(
             "HostBan.Treeview",
             background=SURFACE,
@@ -563,14 +1107,25 @@ class BpApplication(tk.Tk):
         )
         style.map(
             "HostBan.Treeview",
-            background=[("selected", "#566274")],
-            foreground=[("selected", "#ffffff")],
+            background=[("selected", CONTROL_SELECTED)],
+            foreground=[("selected", FG)],
         )
-        style.map("Treeview", background=[("selected", "#43566e")])
+        style.map("Treeview", background=[("selected", CONTROL_SELECTED)])
         style.configure("Treeview.Heading", background=PANEL_2, foreground=FG, padding=6)
         style.configure("TNotebook", background=BG, borderwidth=0)
-        style.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=(24, 11), borderwidth=0)
-        style.map("TNotebook.Tab", background=[("selected", PANEL_2)], foreground=[("selected", ACCENT)])
+        style.configure(
+            "TNotebook.Tab",
+            background=PANEL,
+            foreground=MUTED,
+            padding=(24, 11),
+            borderwidth=0,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", PANEL_2), ("active", CONTROL_HOVER)],
+            foreground=[("selected", ACCENT), ("active", FG)],
+        )
         style.configure("TCheckbutton", background=BG, foreground=FG)
         style.map("TCheckbutton", background=[("active", BG)])
         style.configure("TLabelframe", background=BG, foreground=FG)
@@ -633,6 +1188,7 @@ class SetupTab(ttk.Frame):
             "operator_bans": tk.IntVar(value=4),
             "increment": tk.IntVar(value=1),
             "cap": tk.IntVar(value=24),
+            "auction_timer": tk.IntVar(value=20),
             "price_low": tk.IntVar(value=2),
             "price_5": tk.IntVar(value=4),
             "price_6": tk.IntVar(value=8),
@@ -659,12 +1215,12 @@ class SetupTab(ttk.Frame):
         ).pack(side="left")
         tk.Button(
             toolbar,
-            text="⚙  规则参数",
+            text="规则参数",
             font=("Microsoft YaHei UI", 10, "bold"),
             fg=FG,
             bg=PANEL_2,
             activeforeground=ACCENT,
-            activebackground="#333b46",
+            activebackground=CONTROL_HOVER,
             relief="flat",
             bd=0,
             padx=18,
@@ -674,12 +1230,12 @@ class SetupTab(ttk.Frame):
         ).pack(side="right")
         tk.Button(
             toolbar,
-            text="⛔  全局 Ban",
+            text="全局 Ban",
             font=("Microsoft YaHei UI", 10, "bold"),
             fg=FG,
             bg=PANEL_2,
             activeforeground=ACCENT,
-            activebackground="#333b46",
+            activebackground=CONTROL_HOVER,
             relief="flat",
             bd=0,
             padx=18,
@@ -750,8 +1306,10 @@ class SetupTab(ttk.Frame):
         ttk.Button(actions, text="创建并应用", style="Accent.TButton", command=self.apply).pack(
             side="left", ipadx=10
         )
-        ttk.Button(actions, text="导出选手配置", command=self.export).pack(side="left", padx=8)
-        ttk.Button(actions, text="读取已有配置", command=self.load).pack(side="left")
+        ttk.Button(actions, text="读取比赛配置", command=self.load).pack(
+            side="left", padx=8
+        )
+        ttk.Button(actions, text="读取比赛", command=self.load_match).pack(side="left")
         tk.Label(
             stage,
             text="规则已收纳至右上角设置  ·  比赛编号用于阻止错误文件导入",
@@ -802,7 +1360,8 @@ class SetupTab(ttk.Frame):
             f"{self.vars['rounds'].get()} 轮  ·  每轮 {self.vars['picks'].get()} 人  ·  "
             f"Ban {self.vars['branch_bans'].get()} 分支 + {self.vars['operator_bans'].get()} 干员  ·  "
             f"全局 Ban {len(self.global_banned_operator_ids)} 人 / "
-            f"{len(self.global_banned_branches)} 分支  ·  封顶 {self.vars['cap'].get()} 点"
+            f"{len(self.global_banned_branches)} 分支  ·  封顶 {self.vars['cap'].get()} 点  ·  "
+            f"拍卖计时 {self.vars['auction_timer'].get()} 秒"
         )
 
     def open_global_bans(self) -> None:
@@ -866,7 +1425,7 @@ class SetupTab(ttk.Frame):
         branch_icon = tk.Label(
             branch_bar,
             text="◇",
-            font=(self.app.assets.branch_font_family, 28, "bold"),
+            font=(self.app.assets.branch_font_family, 28),
             fg=ACCENT,
             bg=PANEL,
             width=2,
@@ -1146,6 +1705,7 @@ class SetupTab(ttk.Frame):
             ("每方干员 Ban 数", "operator_bans"),
             ("每次加价", "increment"),
             ("价格上限", "cap"),
+            ("拍卖倒计时（秒）", "auction_timer"),
             ("4 星及以下起拍", "price_low"),
             ("5 星起拍", "price_5"),
             ("6 星起拍", "price_6"),
@@ -1207,6 +1767,7 @@ class SetupTab(ttk.Frame):
             max_picks_per_round=7,
             min_increment=self.vars["increment"].get(),
             price_cap=self.vars["cap"].get(),
+            auction_timer_seconds=self.vars["auction_timer"].get(),
             starting_prices=prices,
             enable_default_bans=self.vars["default_bans"].get(),
         )
@@ -1241,17 +1802,6 @@ class SetupTab(ttk.Frame):
         except (RuleError, tk.TclError) as exc:
             self.app.show_error("无法创建比赛", exc)
 
-    def export(self) -> None:
-        try:
-            if not self.app.state or not self.app.state.ban_complete:
-                raise RuleError(
-                    "请先“创建并应用”，再到“主持人 Ban”页完成双方 Ban；"
-                    "确认后从主持人页面导出选手配置。"
-                )
-            self.app.ensure_tab("host_ban").export_player_config()
-        except (RuleError, tk.TclError, OSError) as exc:
-            self.app.show_error("导出失败", exc)
-
     def load(self) -> None:
         path = filedialog.askopenfilename(
             parent=self,
@@ -1269,6 +1819,21 @@ class SetupTab(ttk.Frame):
         except (RuleError, OSError, ValueError) as exc:
             self.app.show_error("读取失败", exc)
 
+    def load_match(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="读取比赛",
+            filetypes=[("完整比赛存档", "*.bprace"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            state = load_state(Path(path))
+            state.config.validate()
+            self.app.set_state(state)
+        except (RuleError, OSError, ValueError, KeyError) as exc:
+            self.app.show_error("读取失败", exc)
+
     def fill_from_config(self, config: MatchConfig) -> None:
         rules = config.rules
         values = {
@@ -1282,6 +1847,7 @@ class SetupTab(ttk.Frame):
             "operator_bans": rules.operator_bans_per_player,
             "increment": rules.min_increment,
             "cap": rules.price_cap,
+            "auction_timer": rules.auction_timer_seconds,
             "price_low": rules.starting_prices[4],
             "price_5": rules.starting_prices[5],
             "price_6": rules.starting_prices[6],
@@ -1381,49 +1947,45 @@ class HostBanTab(ttk.Frame):
             pady=9,
         )
         filters.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        tk.Label(filters, text="搜索", fg=MUTED, bg=PANEL).pack(side="left")
-        ttk.Entry(filters, textvariable=self.search_var, width=21).pack(
+        filter_controls = tk.Frame(filters, bg=PANEL)
+        filter_controls.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            filter_controls,
+            text="SEARCH",
+            font=("Segoe UI", 9, "bold"),
+            fg=MUTED,
+            bg=PANEL,
+        ).pack(side="left")
+        ttk.Entry(filter_controls, textvariable=self.search_var, width=24).pack(
             side="left", padx=(7, 10)
         )
         rarity = ttk.Combobox(
-            filters,
+            filter_controls,
             textvariable=self.rarity_var,
             values=["全部星级", "6 星", "5 星", "4 星及以下"],
             state="readonly",
             width=11,
         )
         rarity.pack(side="left", padx=4)
-        profession = ttk.Combobox(
-            filters,
-            textvariable=self.profession_var,
-            values=["全部职业"] + list(PROFESSION_ICONS),
-            state="readonly",
-            width=11,
-        )
-        profession.pack(side="left", padx=4)
-        branches = operator_values(app.operators.values(), "branch")
-        branch_filter = ttk.Combobox(
-            filters,
-            textvariable=self.branch_filter_var,
-            values=["全部分支"] + branches,
-            state="readonly",
-            width=15,
-        )
-        branch_filter.pack(side="left", padx=4)
-        for widget in (rarity, profession, branch_filter):
-            widget.bind(
-                "<<ComboboxSelected>>", lambda _event: self.refresh_catalog()
-            )
+        rarity.bind("<<ComboboxSelected>>", lambda _event: self.refresh_catalog())
         self.search_var.trace_add(
             "write", lambda *_args: self.schedule_catalog_refresh()
         )
         tk.Label(
-            filters,
+            filter_controls,
             textvariable=self.catalog_count_var,
             fg=MUTED,
             bg=PANEL,
             font=("Microsoft YaHei UI", 9),
         ).pack(side="right")
+        self.class_filter = OperatorClassFilter(
+            filters,
+            app,
+            self.profession_var,
+            self.branch_filter_var,
+            self.refresh_catalog,
+        )
+        self.class_filter.pack(fill="x")
 
         content = tk.PanedWindow(
             self,
@@ -1496,8 +2058,8 @@ class HostBanTab(ttk.Frame):
             text="BAN 当前选中干员",
             command=self.ban_selected,
             bg=ACCENT,
-            fg="#171717",
-            activebackground="#ffd06f",
+            fg=HEADER_BG,
+            activebackground=ACCENT_HOVER,
             relief="flat",
             bd=0,
             cursor="hand2",
@@ -1559,7 +2121,7 @@ class HostBanTab(ttk.Frame):
             icon = tk.Label(
                 branch_panel,
                 text="◇",
-                font=(self.app.assets.branch_font_family, 28, "bold"),
+                font=(self.app.assets.branch_font_family, 28),
                 fg=color,
                 bg=SURFACE,
                 width=2,
@@ -1909,19 +2471,20 @@ class HostBanTab(ttk.Frame):
                 font=("Microsoft YaHei UI", 8, "bold"),
                 tags=tags,
             )
-        name_size = 10 if len(operator.name) <= 6 else 9
-        self.catalog_canvas.create_text(
+        name_size = card_operator_name_size(operator.name, 10, 9, 8)
+        draw_shadowed_card_name(
+            self.catalog_canvas,
             (x1 + x2) / 2,
-            y2 - 48,
-            text=operator.name,
-            fill=FG,
+            y2 - 31,
+            text=card_operator_name(operator.name),
             font=("Microsoft YaHei UI", name_size, "bold"),
-            width=max(70, self.card_width - 12),
+            fill=FG,
+            anchor="s",
             tags=tags,
         )
         self.catalog_canvas.create_text(
             (x1 + x2) / 2,
-            y2 - 11,
+            y2 - 8,
             text=operator.branch,
             fill=PROFESSION_COLORS.get(operator.profession, MUTED),
             font=("Microsoft YaHei UI", 8),
@@ -2299,43 +2862,18 @@ class PlayerTab(ttk.Frame):
             pady=13,
         )
         filters.grid(row=1, column=0, sticky="ew", pady=(0, 9))
-        professions = tk.Frame(filters, bg=PANEL)
-        professions.pack(side="top", anchor="w", fill="x")
-        for profession in ["全部职业"] + list(PROFESSION_ICONS):
-            color = ACCENT if profession == "全部职业" else PROFESSION_COLORS[profession]
-            icon_image = self.app.assets.profession_icon(profession)
-            button = tk.Button(
-                professions,
-                text="全部" if profession == "全部职业" else profession,
-                image=icon_image,
-                compound="top",
-                font=("Microsoft YaHei UI", 10, "bold"),
-                width=108,
-                height=128,
-                fg=color,
-                bg=SURFACE_RAISED,
-                activeforeground="#111",
-                activebackground=color,
-                relief="flat",
-                bd=0,
-                cursor="hand2",
-                padx=3,
-                pady=3,
-                command=lambda value=profession: self.set_profession(value),
-            )
-            button.pack(side="left", padx=4)
-            self.profession_buttons[profession] = button
-
         controls = tk.Frame(filters, bg=PANEL)
-        controls.pack(side="top", fill="x", pady=(9, 0))
+        controls.pack(side="top", fill="x", pady=(0, 8))
         tk.Label(
             controls,
-            text="搜索与筛选",
-            font=("Microsoft YaHei UI", 10, "bold"),
+            text="SEARCH",
+            font=("Segoe UI", 9, "bold"),
             fg=MUTED,
             bg=PANEL,
         ).pack(side="left", padx=(2, 10))
-        ttk.Entry(controls, textvariable=self.search_var, width=18).pack(side="left", padx=(0, 6))
+        ttk.Entry(controls, textvariable=self.search_var, width=24).pack(
+            side="left", padx=(0, 6)
+        )
         rarity = ttk.Combobox(
             controls,
             textvariable=self.rarity_var,
@@ -2344,16 +2882,17 @@ class PlayerTab(ttk.Frame):
             width=11,
         )
         rarity.pack(side="left", padx=4)
-        self.branch_filter = ttk.Combobox(
-            controls,
-            textvariable=self.branch_filter_var,
-            values=["全部分支"] + operator_values(app.operators.values(), "branch"),
-            state="readonly",
-            width=15,
+        rarity.bind(
+            "<<ComboboxSelected>>", lambda _event: self.reset_pool_page()
         )
-        self.branch_filter.pack(side="left", padx=4)
-        for widget in (rarity, self.branch_filter):
-            widget.bind("<<ComboboxSelected>>", lambda _event: self.reset_pool_page())
+        self.class_filter = OperatorClassFilter(
+            filters,
+            app,
+            self.profession_var,
+            self.branch_filter_var,
+            self.reset_pool_page,
+        )
+        self.class_filter.pack(fill="x")
 
         content = ttk.Panedwindow(self, orient="horizontal")
         content.grid(row=2, column=0, sticky="nsew")
@@ -2444,7 +2983,7 @@ class PlayerTab(ttk.Frame):
         self.branch_preview_icon = tk.Label(
             branch_line,
             text="◇",
-            font=(self.app.assets.branch_font_family, 25, "bold"),
+            font=(self.app.assets.branch_font_family, 25),
             width=2,
             fg=ACCENT,
             bg=SURFACE_RAISED,
@@ -2558,17 +3097,13 @@ class PlayerTab(ttk.Frame):
 
     def set_profession(self, profession: str) -> None:
         self.profession_var.set(profession)
+        self.branch_filter_var.set("全部分支")
         self.update_profession_buttons()
         self.reset_pool_page()
 
     def update_profession_buttons(self) -> None:
-        for profession, button in self.profession_buttons.items():
-            color = ACCENT if profession == "全部职业" else PROFESSION_COLORS[profession]
-            selected = self.profession_var.get() == profession
-            button.configure(
-                bg=color if selected else SURFACE_RAISED,
-                fg="#111820" if selected else color,
-            )
+        if hasattr(self, "class_filter"):
+            self.class_filter.refresh_selection()
 
     def reset_pool_page(self) -> None:
         if hasattr(self, "pool_canvas"):
@@ -2811,20 +3346,20 @@ class PlayerTab(ttk.Frame):
                     fill="#121212",
                     tags=(tag, "operator_card"),
                 )
-            name_length = len(operator.name)
-            name_font_size = 11 if name_length <= 5 else 10 if name_length <= 8 else 9
-            canvas.create_text(
+            name_font_size = card_operator_name_size(operator.name, 11, 10, 8)
+            draw_shadowed_card_name(
+                canvas,
                 (x1 + x2) // 2,
-                y2 - 58,
-                text=operator.name,
+                y2 - 39,
+                text=card_operator_name(operator.name),
                 font=("Microsoft YaHei UI", name_font_size, "bold"),
                 fill=FG,
-                width=max(80, card_width - 16),
+                anchor="s",
                 tags=(tag, "operator_card"),
             )
             canvas.create_text(
                 (x1 + x2) // 2,
-                y2 - 14,
+                y2 - 20,
                 text=operator.branch,
                 font=("Microsoft YaHei UI", 8),
                 fill=PROFESSION_COLORS.get(operator.profession, MUTED),
@@ -2927,7 +3462,7 @@ class PlayerTab(ttk.Frame):
                 43,
                 text=self.app.assets.branch_glyph(branch_id),
                 fill=ACCENT,
-                font=(self.app.assets.branch_font_family, 27, "bold"),
+                font=(self.app.assets.branch_font_family, 27),
                 tags=(tag,),
             )
             canvas.create_text(
@@ -3099,26 +3634,44 @@ class PlayerTab(ttk.Frame):
 
 class AuctionTab(ttk.Frame):
     def __init__(self, parent: ttk.Notebook, app: BpApplication):
-        super().__init__(parent, padding=16)
+        super().__init__(parent, padding=12)
         self.app = app
         self.submissions: dict[str, PlayerSubmission] = {}
         self.config_var = tk.StringVar(value="尚未载入比赛")
         self.round_import_var = tk.StringVar(value="当前等待：第 1 轮选手文件")
-        self.a_file_var = tk.StringVar(value="A 方：未导入")
-        self.b_file_var = tk.StringVar(value="B 方：未导入")
+        self.a_file_var = tk.StringVar(value="蓝方：未导入")
+        self.b_file_var = tk.StringVar(value="红方：未导入")
         self.seed_var = tk.StringVar(value=str(random.SystemRandom().randint(100000, 999999999)))
         self.progress_var = tk.StringVar(value="等待生成拍卖池")
         self.current_name_var = tk.StringVar(value="—")
         self.current_meta_var = tk.StringVar(value="请先导入双方选手文件")
         self.price_var = tk.StringVar(value="—")
         self.leader_var = tk.StringVar(value="尚无出价")
-        self.a_bid_var = tk.StringVar(value="A 方出价")
-        self.b_bid_var = tk.StringVar(value="B 方出价")
-        self.result_trees: dict[str, ttk.Treeview] = {}
+        self.a_bid_var = tk.StringVar(value="蓝方出价")
+        self.b_bid_var = tk.StringVar(value="红方出价")
+        self.a_pass_var = tk.StringVar(value="蓝方放弃")
+        self.b_pass_var = tk.StringVar(value="红方放弃")
+        self.timer_var = tk.StringVar(value="20")
+        self.timer_context_var = tk.StringVar(value="等待首次出价")
+        self.result_title_vars = {
+            PLAYER_A: tk.StringVar(value="蓝方获得 · 0"),
+            PLAYER_B: tk.StringVar(value="红方获得 · 0"),
+            "unsold": tk.StringVar(value="流拍 · 0"),
+        }
+        self.result_canvases: dict[str, tk.Canvas] = {}
+        self.result_scrollbars: dict[str, ttk.Scrollbar] = {}
+        self.bid_frames: dict[str, tk.Frame] = {}
+        self.bid_buttons: dict[str, tk.Button] = {}
+        self.selected_result_operator_id: str | None = None
+        self._result_render_job: str | None = None
+        self._timer_job: str | None = None
+        self._timer_operator_id: str | None = None
+        self._timer_remaining = 20
 
-        self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=4)
-        self.rowconfigure(1, weight=1)
+        self.columnconfigure(0, weight=0, minsize=300)
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=0)
+        self.rowconfigure(1, weight=1, minsize=470)
 
         control = ttk.LabelFrame(self, text=" 文件与进度 ", padding=12)
         control.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(0, 8))
@@ -3126,21 +3679,33 @@ class AuctionTab(ttk.Frame):
         ttk.Label(control, textvariable=self.config_var, style="CardTitle.TLabel", wraplength=320).grid(
             row=0, column=0, sticky="ew", pady=(0, 12)
         )
-        ttk.Label(control, textvariable=self.round_import_var, foreground=ACCENT).grid(
+        ttk.Label(
+            control,
+            textvariable=self.round_import_var,
+            foreground=ACCENT,
+            wraplength=300,
+            justify="left",
+        ).grid(
             row=1, column=0, sticky="w", pady=(0, 8)
         )
         ttk.Button(control, text="读取比赛配置", command=self.load_config_file).grid(
             row=2, column=0, sticky="ew", pady=3
         )
-        ttk.Button(control, text="导入 A 方选手文件", command=lambda: self.import_submission(PLAYER_A)).grid(
-            row=3, column=0, sticky="ew", pady=3
+        self.a_import_button = ttk.Button(
+            control,
+            text="导入蓝方选手文件",
+            command=lambda: self.import_submission(PLAYER_A),
         )
+        self.a_import_button.grid(row=3, column=0, sticky="ew", pady=3)
         ttk.Label(control, textvariable=self.a_file_var, style="Muted.TLabel", wraplength=300).grid(
             row=4, column=0, sticky="w", pady=(2, 6)
         )
-        ttk.Button(control, text="导入 B 方选手文件", command=lambda: self.import_submission(PLAYER_B)).grid(
-            row=5, column=0, sticky="ew", pady=3
+        self.b_import_button = ttk.Button(
+            control,
+            text="导入红方选手文件",
+            command=lambda: self.import_submission(PLAYER_B),
         )
+        self.b_import_button.grid(row=5, column=0, sticky="ew", pady=3)
         ttk.Label(control, textvariable=self.b_file_var, style="Muted.TLabel", wraplength=300).grid(
             row=6, column=0, sticky="w", pady=(2, 12)
         )
@@ -3153,120 +3718,206 @@ class AuctionTab(ttk.Frame):
         ttk.Button(control, text="保存完整比赛", command=self.save_match).grid(
             row=11, column=0, sticky="ew", pady=3
         )
-        ttk.Button(control, text="读取比赛存档", command=self.load_match).grid(
-            row=12, column=0, sticky="ew", pady=3
-        )
-        ttk.Label(
-            control,
-            text="拍卖池生成后，尚未轮到的干员不会在主持页面展示。",
-            style="Muted.TLabel",
-            wraplength=300,
-        ).grid(row=13, column=0, sticky="sw", pady=(18, 0))
-        control.rowconfigure(13, weight=1)
+        control.rowconfigure(12, weight=1)
 
-        auction = ttk.Frame(self, style="Panel.TFrame", padding=22)
+        auction = ttk.Frame(self, style="Panel.TFrame", padding=(20, 14))
         auction.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         auction.columnconfigure(0, weight=1)
-        ttk.Label(auction, textvariable=self.progress_var, style="Panel.TLabel").grid(
-            row=0, column=0, sticky="w"
-        )
-        self.current_avatar_label = tk.Label(
+        auction.columnconfigure(1, weight=1)
+        tk.Label(
             auction,
+            textvariable=self.progress_var,
+            font=("Microsoft YaHei UI", 11, "bold"),
+            fg=MUTED,
             bg=PANEL,
-            width=132,
-            height=122,
+        ).grid(
+            row=0, column=0, sticky="w", pady=(0, 8)
+        )
+        timer_head = tk.Frame(auction, bg=PANEL)
+        timer_head.grid(row=0, column=1, sticky="e", pady=(0, 8))
+        tk.Label(
+            timer_head,
+            textvariable=self.timer_context_var,
+            font=("Microsoft YaHei UI", 10, "bold"),
+            fg=MUTED,
+            bg=PANEL,
+        ).pack(side="left", padx=(0, 10))
+        self.timer_value_label = tk.Label(
+            timer_head,
+            textvariable=self.timer_var,
+            font=("Segoe UI", 20, "bold"),
+            fg=FG,
+            bg=SURFACE_RAISED,
+            width=3,
+            padx=4,
+            pady=2,
+        )
+        self.timer_value_label.pack(side="left")
+
+        current = tk.Frame(auction, bg=PANEL)
+        current.grid(row=1, column=0, columnspan=2, sticky="ew")
+        current.columnconfigure(1, weight=1)
+        avatar_stage = tk.Frame(
+            current,
+            bg=SURFACE_RAISED,
+            width=142,
+            height=132,
+            highlightbackground=LINE,
+            highlightthickness=1,
+        )
+        avatar_stage.grid(row=0, column=0, rowspan=4, sticky="w", padx=(0, 18))
+        avatar_stage.grid_propagate(False)
+        self.current_avatar_label = tk.Label(
+            avatar_stage,
+            bg=SURFACE_RAISED,
+            fg=LINE,
+            text="◇",
+            font=("Segoe UI Symbol", 34),
             bd=0,
         )
-        self.current_avatar_label.grid(row=1, column=0, pady=(12, 4))
-        ttk.Label(
-            auction,
+        self.current_avatar_label.place(relx=0.5, rely=0.5, anchor="center")
+        tk.Label(
+            current,
             textvariable=self.current_name_var,
-            style="Panel.TLabel",
-            font=("Microsoft YaHei UI", 28, "bold"),
-        ).grid(row=2, column=0, pady=(2, 4))
-        ttk.Label(
-            auction,
+            font=("Microsoft YaHei UI", 24, "bold"),
+            fg=FG,
+            bg=PANEL,
+            anchor="w",
+        ).grid(row=0, column=1, sticky="w")
+        tk.Label(
+            current,
             textvariable=self.current_meta_var,
-            style="Panel.TLabel",
-            foreground=MUTED,
             font=("Microsoft YaHei UI", 11),
-        ).grid(row=3, column=0)
-        ttk.Label(
-            auction,
+            fg=MUTED,
+            bg=PANEL,
+            anchor="w",
+        ).grid(row=1, column=1, sticky="w", pady=(2, 0))
+        tk.Label(
+            current,
             textvariable=self.price_var,
-            style="Panel.TLabel",
-            foreground=ACCENT,
-            font=("Microsoft YaHei UI", 42, "bold"),
-        ).grid(row=4, column=0, pady=(10, 0))
-        ttk.Label(
-            auction,
+            font=("Microsoft YaHei UI", 34, "bold"),
+            fg=ACCENT,
+            bg=PANEL,
+            anchor="w",
+        ).grid(row=2, column=1, sticky="w", pady=(8, 2))
+        self.leader_label = tk.Label(
+            current,
             textvariable=self.leader_var,
-            style="Panel.TLabel",
-            foreground=MUTED,
-        ).grid(row=5, column=0, pady=(0, 14))
+            font=("Microsoft YaHei UI", 12, "bold"),
+            fg=FG,
+            bg=SURFACE_RAISED,
+            anchor="w",
+            padx=14,
+            pady=6,
+        )
+        self.leader_label.grid(row=3, column=1, sticky="ew", pady=(4, 0))
 
-        bids = ttk.Frame(auction, style="Panel.TFrame")
-        bids.grid(row=6, column=0, sticky="ew", padx=28)
+        bids = tk.Frame(auction, bg=PANEL)
+        bids.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 4))
         bids.columnconfigure(0, weight=1)
         bids.columnconfigure(1, weight=1)
-        ttk.Button(
-            bids, textvariable=self.a_bid_var, style="AuctionBlue.TButton", command=lambda: self.bid(PLAYER_A)
-        ).grid(row=0, column=0, padx=(0, 8), pady=6, sticky="ew")
-        ttk.Button(
-            bids, textvariable=self.b_bid_var, style="AuctionRed.TButton", command=lambda: self.bid(PLAYER_B)
-        ).grid(row=0, column=1, padx=(8, 0), pady=6, sticky="ew")
-        ttk.Button(bids, text="A 方放弃", command=lambda: self.pass_bid(PLAYER_A)).grid(
-            row=1, column=0, padx=(0, 8), pady=6, ipady=5, sticky="ew"
-        )
-        ttk.Button(bids, text="B 方放弃", command=lambda: self.pass_bid(PLAYER_B)).grid(
-            row=1, column=1, padx=(8, 0), pady=6, ipady=5, sticky="ew"
-        )
+        for column, (player, color, bid_var, pass_var) in enumerate(
+            (
+                (PLAYER_A, BLUE, self.a_bid_var, self.a_pass_var),
+                (PLAYER_B, RED, self.b_bid_var, self.b_pass_var),
+            )
+        ):
+            side = tk.Frame(
+                bids,
+                bg=PANEL,
+                highlightbackground=LINE,
+                highlightthickness=1,
+                padx=4,
+                pady=4,
+            )
+            side.grid(
+                row=0,
+                column=column,
+                sticky="ew",
+                padx=((0, 7) if column == 0 else (7, 0)),
+            )
+            side.columnconfigure(0, weight=1)
+            bid_button = tk.Button(
+                side,
+                textvariable=bid_var,
+                command=lambda value=player: self.bid(value),
+                bg=color,
+                fg=HEADER_BG,
+                activebackground=color,
+                activeforeground=HEADER_BG,
+                font=("Microsoft YaHei UI", 15, "bold"),
+                relief="flat",
+                bd=0,
+                cursor="hand2",
+                pady=12,
+            )
+            bid_button.grid(row=0, column=0, sticky="ew")
+            tk.Button(
+                side,
+                textvariable=pass_var,
+                command=lambda value=player: self.pass_bid(value),
+                bg=SURFACE_RAISED,
+                fg=FG,
+                activebackground=CONTROL_HOVER,
+                activeforeground=FG,
+                font=("Microsoft YaHei UI", 10, "bold"),
+                relief="flat",
+                bd=0,
+                cursor="hand2",
+                pady=7,
+            ).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+            self.bid_frames[player] = side
+            self.bid_buttons[player] = bid_button
+
         finish = ttk.Frame(auction, style="Panel.TFrame")
-        finish.grid(row=7, column=0, pady=(10, 4))
+        finish.grid(row=3, column=0, columnspan=2, pady=(6, 0))
         ttk.Button(finish, text="确认成交", command=self.award).pack(side="left", padx=4)
         ttk.Button(finish, text="标记流拍", command=self.unsold).pack(side="left", padx=4)
 
-        lower = ttk.Frame(self)
-        lower.grid(row=1, column=1, sticky="nsew", padx=(8, 0), pady=(10, 0))
-        lower.columnconfigure(0, weight=1)
-        lower.columnconfigure(1, weight=5)
-        lower.rowconfigure(0, weight=1)
-
-        log_frame = ttk.LabelFrame(lower, text=" 当前干员出价记录 ", padding=8)
-        log_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        log_frame.rowconfigure(0, weight=1)
-        log_frame.columnconfigure(0, weight=1)
-        self.log = tk.Text(
-            log_frame,
-            height=9,
-            bg=PANEL,
-            fg=FG,
-            insertbackground=FG,
-            relief="flat",
-            state="disabled",
-            font=("Microsoft YaHei UI", 10),
-        )
-        self.log.grid(row=0, column=0, sticky="nsew")
-
         history = tk.Frame(
-            lower,
+            self,
             bg=PANEL,
             highlightbackground=LINE,
             highlightthickness=1,
-            padx=10,
+            padx=12,
             pady=10,
         )
-        history.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        history.grid(row=1, column=1, sticky="nsew", padx=(8, 0), pady=(10, 0))
         history.rowconfigure(1, weight=1)
-        for column in range(3):
-            history.columnconfigure(column, weight=1)
+        history.columnconfigure(0, weight=2, uniform="auction_result")
+        history.columnconfigure(1, weight=2, uniform="auction_result")
+        history.columnconfigure(2, weight=1, uniform="auction_result")
         tk.Label(
             history,
             text="已完成拍卖",
-            font=("Microsoft YaHei UI", 13, "bold"),
+            font=("Microsoft YaHei UI", 16, "bold"),
             fg=FG,
             bg=PANEL,
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        self.reauction_button = tk.Button(
+            history,
+            text="重新拍卖选中干员",
+            command=self.reauction_selected,
+            state="disabled",
+            bg=SURFACE_RAISED,
+            fg=MUTED,
+            activebackground=CONTROL_HOVER,
+            activeforeground=FG,
+            disabledforeground="#66727D",
+            font=("Microsoft YaHei UI", 10, "bold"),
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            padx=14,
+            pady=7,
+        )
+        self.reauction_button.grid(
+            row=0,
+            column=1,
+            columnspan=2,
+            sticky="e",
+            pady=(0, 8),
+        )
         for column, (key, title, color) in enumerate(
             (
                 (PLAYER_A, "蓝方获得", BLUE),
@@ -3292,41 +3943,77 @@ class AuctionTab(ttk.Frame):
             panel.rowconfigure(1, weight=1)
             tk.Label(
                 panel,
-                text=title,
-                font=("Microsoft YaHei UI", 10, "bold"),
+                textvariable=self.result_title_vars[key],
+                font=("Microsoft YaHei UI", 12, "bold"),
                 fg=color,
                 bg=SURFACE,
-            ).grid(row=0, column=0, sticky="w", pady=(0, 5))
-            tree = ttk.Treeview(
+            ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 7))
+            canvas = tk.Canvas(
                 panel,
-                columns=("price", "round"),
-                show="tree headings",
-                selectmode="browse",
-                style="AuctionResult.Treeview",
+                bg=SURFACE,
+                highlightthickness=0,
+                bd=0,
+                yscrollincrement=24,
             )
-            tree.heading("#0", text="干员")
-            tree.heading("price", text="价格")
-            tree.heading("round", text="轮次")
-            tree.column("#0", width=230, minwidth=170, anchor="w", stretch=True)
-            tree.column("price", width=72, minwidth=62, anchor="center", stretch=False)
-            tree.column("round", width=54, minwidth=48, anchor="center", stretch=False)
-            result_scroll = ttk.Scrollbar(panel, orient="vertical", command=tree.yview)
-            result_xscroll = ttk.Scrollbar(panel, orient="horizontal", command=tree.xview)
-            tree.configure(
-                yscrollcommand=result_scroll.set,
-                xscrollcommand=result_xscroll.set,
+            result_scroll = ttk.Scrollbar(
+                panel,
+                orient="vertical",
+                command=canvas.yview,
             )
-            tree.grid(row=1, column=0, sticky="nsew")
+            canvas.configure(yscrollcommand=result_scroll.set)
+            canvas.grid(row=1, column=0, sticky="nsew")
             result_scroll.grid(row=1, column=1, sticky="ns")
-            result_xscroll.grid(row=2, column=0, sticky="ew")
-            self.result_trees[key] = tree
+            canvas.bind(
+                "<Configure>",
+                lambda _event: self.schedule_result_render(),
+            )
+            canvas.bind(
+                "<MouseWheel>",
+                lambda event, target=canvas: target.yview_scroll(
+                    -1 if event.delta > 0 else 1,
+                    "units",
+                ),
+            )
+            self.result_canvases[key] = canvas
+            self.result_scrollbars[key] = result_scroll
+
+        self.refresh_team_labels()
+
+    def team_name(self, player: str) -> str:
+        if player not in (PLAYER_A, PLAYER_B):
+            return player
+        config = self.app.config
+        if not config:
+            return "蓝方" if player == PLAYER_A else "红方"
+        name = (
+            config.player_a_name
+            if player == PLAYER_A
+            else config.player_b_name
+        ).strip()
+        return name or ("蓝方" if player == PLAYER_A else "红方")
+
+    def refresh_team_labels(self) -> None:
+        blue_name = self.team_name(PLAYER_A)
+        red_name = self.team_name(PLAYER_B)
+        self.a_import_button.configure(text=f"导入 {blue_name} 选手文件")
+        self.b_import_button.configure(text=f"导入 {red_name} 选手文件")
+        self.a_pass_var.set(f"{blue_name} 放弃")
+        self.b_pass_var.set(f"{red_name} 放弃")
+        self.result_title_vars[PLAYER_A].set(f"蓝方 · {blue_name} · 0")
+        self.result_title_vars[PLAYER_B].set(f"红方 · {red_name} · 0")
+
+    def schedule_result_render(self) -> None:
+        if self._result_render_job is not None:
+            return
+        self._result_render_job = self.after_idle(self.refresh_auction_results)
 
     def use_config(self, config: MatchConfig) -> None:
         self.submissions = {}
         self.config_var.set(f"{config.title}\n{config.match_id}")
         self.round_import_var.set("当前等待：第 1 轮选手文件")
-        self.a_file_var.set("A 方：未导入")
-        self.b_file_var.set("B 方：未导入")
+        self.refresh_team_labels()
+        self.a_file_var.set(f"{self.team_name(PLAYER_A)}：未导入")
+        self.b_file_var.set(f"{self.team_name(PLAYER_B)}：未导入")
         self.progress_var.set("等待生成拍卖池")
         self.update_current()
 
@@ -3352,7 +4039,7 @@ class AuctionTab(ttk.Frame):
             return
         path = filedialog.askopenfilename(
             parent=self,
-            title=f"导入 {expected_player} 方选手文件",
+            title=f"导入 {self.team_name(expected_player)} 选手文件",
             filetypes=[("选手 BP 文件", "*.bpselect"), ("所有文件", "*.*")],
         )
         if not path:
@@ -3360,7 +4047,10 @@ class AuctionTab(ttk.Frame):
         try:
             submission = load_submission(Path(path))
             if submission.player != expected_player:
-                raise RuleError(f"选择的是 {submission.player} 方文件，并非 {expected_player} 方")
+                raise RuleError(
+                    f"选择的是 {self.team_name(submission.player)} 文件，"
+                    f"并非 {self.team_name(expected_player)} 文件"
+                )
             expected_round = self.next_round_to_prepare()
             if submission.round_index != expected_round:
                 raise RuleError(
@@ -3384,7 +4074,7 @@ class AuctionTab(ttk.Frame):
                     for player in (PLAYER_A, PLAYER_B)
                 )
                 self.app.ensure_tab("host_ban").load_from_state()
-            label = f"{expected_player} 方：{submission.player_name} · 已校验"
+            label = f"{self.team_name(expected_player)}：{submission.player_name} · 已校验"
             (self.a_file_var if expected_player == PLAYER_A else self.b_file_var).set(label)
         except (RuleError, OSError, ValueError) as exc:
             self.app.show_error("导入失败", exc)
@@ -3394,7 +4084,10 @@ class AuctionTab(ttk.Frame):
             if not self.app.config:
                 raise RuleError("请先读取比赛配置")
             if PLAYER_A not in self.submissions or PLAYER_B not in self.submissions:
-                raise RuleError("请先分别导入 A、B 两方选手文件")
+                raise RuleError(
+                    f"请先分别导入 {self.team_name(PLAYER_A)}、"
+                    f"{self.team_name(PLAYER_B)} 的选手文件"
+                )
             state = self.app.state or MatchState(config=self.app.config)
             if not state.ban_complete:
                 raise RuleError("双方主持人 Ban 尚未完成或未随选手文件导入")
@@ -3467,8 +4160,8 @@ class AuctionTab(ttk.Frame):
             state.advance()
             self.app.state = state
             self.submissions = {}
-            self.a_file_var.set("A 方：未导入")
-            self.b_file_var.set("B 方：未导入")
+            self.a_file_var.set(f"{self.team_name(PLAYER_A)}：未导入")
+            self.b_file_var.set(f"{self.team_name(PLAYER_B)}：未导入")
             self.round_import_var.set(f"正在拍卖：第 {round_index} 轮")
             self.app.ensure_tab("settlement").refresh()
             self.update_current()
@@ -3501,7 +4194,7 @@ class AuctionTab(ttk.Frame):
             if item.status == "sold":
                 self._advance_completed_item()
             else:
-                self.update_current()
+                self.update_current(reset_timer=True)
         except RuleError as exc:
             self.app.show_error("无法出价", exc)
 
@@ -3512,7 +4205,7 @@ class AuctionTab(ttk.Frame):
             if ended:
                 self._advance_completed_item()
             else:
-                self.update_current()
+                self.update_current(reset_timer=True)
         except RuleError as exc:
             self.app.show_error("无法放弃", exc)
 
@@ -3543,6 +4236,7 @@ class AuctionTab(ttk.Frame):
         state = self.app.state
         if not state:
             raise RuleError("尚未生成拍卖池")
+        self._cancel_timer()
         state.current_index += 1
         state.advance()
         self.update_current()
@@ -3564,39 +4258,44 @@ class AuctionTab(ttk.Frame):
                 parent=self,
             )
 
-    def update_current(self) -> None:
-        self.refresh_auction_results()
+    def update_current(self, reset_timer: bool = False) -> None:
+        self.schedule_result_render()
         state = self.app.state
         if not state or not state.auction_items:
-            self.current_avatar_label.configure(image="", text="")
+            self._cancel_timer()
+            self.current_avatar_label.configure(image="", text="◇")
             self.current_avatar_label.image = None
             self.current_name_var.set("—")
             self.current_meta_var.set("请先导入双方文件并生成拍卖池")
             self.price_var.set("—")
             self.leader_var.set("尚无出价")
+            self.leader_label.grid()
             self.progress_var.set("等待生成拍卖池")
-            self._set_log([])
+            self._update_leader_visual(None)
             return
         item = state.current_item()
         if not item:
-            self.current_avatar_label.configure(image="", text="")
+            self._cancel_timer()
+            self.current_avatar_label.configure(image="", text="◇")
             self.current_avatar_label.image = None
             if state.auction_complete:
                 self.current_name_var.set("拍卖完成")
                 self.current_meta_var.set("请进入“阵容结算”登记实际上场干员")
                 self.price_var.set("✓")
-                self.leader_var.set("完整出价记录已保存在比赛存档中")
+                self.leader_var.set("")
                 self.progress_var.set(f"已完成 {len(state.auction_items)}/{len(state.auction_items)}")
             else:
                 next_round = self.next_round_to_prepare()
                 self.current_name_var.set(f"等待第 {next_round} 轮选取")
                 self.current_meta_var.set("双方分别导出本轮选手文件后，由主办方导入")
                 self.price_var.set("—")
-                self.leader_var.set("未生成的拍卖池仍保持隐藏")
+                self.leader_var.set("")
                 self.progress_var.set(f"已完成前 {next_round - 1} 轮")
-            self._set_log([])
+            self.leader_label.grid_remove()
+            self._update_leader_visual(None)
             return
         operator = self.app.operators[item.operator_id]
+        self.leader_label.grid()
         avatar = self.app.assets.avatar(operator, 120)
         self.current_avatar_label.configure(image=avatar, text="")
         self.current_avatar_label.image = avatar
@@ -3610,7 +4309,7 @@ class AuctionTab(ttk.Frame):
         )
         if item.status == "sold":
             self.price_var.set(f"{item.final_price} 点")
-            self.leader_var.set(f"成交给 {item.winner} 方")
+            self.leader_var.set(f"成交给 {self.team_name(item.winner)}")
         elif item.status == "unsold":
             self.price_var.set("流拍")
             self.leader_var.set("无人获得")
@@ -3618,36 +4317,143 @@ class AuctionTab(ttk.Frame):
             self.price_var.set(
                 f"{item.current_price} 点" if item.current_price is not None else f"{item.starting_price} 点"
             )
-            self.leader_var.set(f"当前领先：{item.leader} 方" if item.leader else "等待首次出价")
+            self.leader_var.set(
+                f"领先 · {self.team_name(item.leader)}"
+                if item.leader
+                else "等待首次出价"
+            )
+        self._update_leader_visual(item.leader)
         try:
             next_price = self.next_price()
             cap = state.config.rules.price_cap
-            text = f"出价 {next_price} 点" if next_price <= cap else "已达封顶"
-            self.a_bid_var.set("A 方" + text)
-            self.b_bid_var.set("B 方" + text)
+            self.a_bid_var.set(
+                f"{self.team_name(PLAYER_A)} · 出价 {next_price} 点"
+                if next_price <= cap
+                else f"{self.team_name(PLAYER_A)} · 已达封顶"
+            )
+            self.b_bid_var.set(
+                f"{self.team_name(PLAYER_B)} · 出价 {next_price} 点"
+                if next_price <= cap
+                else f"{self.team_name(PLAYER_B)} · 已达封顶"
+            )
         except RuleError:
-            self.a_bid_var.set("A 方出价")
-            self.b_bid_var.set("B 方出价")
-        self._set_log(item.bids)
+            self.a_bid_var.set(f"{self.team_name(PLAYER_A)} · 出价")
+            self.b_bid_var.set(f"{self.team_name(PLAYER_B)} · 出价")
+        self._start_timer(item, force=reset_timer)
 
-    def _set_log(self, bids) -> None:
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        if not bids:
-            self.log.insert("end", "尚无出价记录。\n")
-        for index, bid in enumerate(bids, start=1):
-            if bid.action == "bid":
-                line = f"{index:02d}. {bid.player} 方出价 {bid.amount} 点"
-            else:
-                line = f"{index:02d}. {bid.player} 方放弃跟价"
-            self.log.insert("end", line + "\n")
-        self.log.configure(state="disabled")
+    def _update_leader_visual(self, leader: str | None) -> None:
+        for player, frame in self.bid_frames.items():
+            color = BLUE if player == PLAYER_A else RED
+            leading = player == leader
+            frame.configure(
+                bg=color if leading else PANEL,
+                highlightbackground=color if leading else LINE,
+                highlightthickness=4 if leading else 1,
+            )
+            self.bid_buttons[player].configure(
+                relief="sunken" if leading else "flat",
+            )
+        if leader == PLAYER_A:
+            self.leader_label.configure(bg=BLUE, fg=HEADER_BG)
+        elif leader == PLAYER_B:
+            self.leader_label.configure(bg=RED, fg=HEADER_BG)
+        else:
+            self.leader_label.configure(bg=SURFACE_RAISED, fg=FG)
+
+    def _start_timer(self, item, *, force: bool = False) -> None:
+        if item.status not in ("pending", "active"):
+            self._cancel_timer()
+            return
+        token = f"{item.operator_id}:{item.attempt}"
+        if (
+            not force
+            and token == self._timer_operator_id
+            and self._timer_job is not None
+        ):
+            self._update_timer_context(item)
+            return
+        is_new_attempt = token != self._timer_operator_id
+        self._cancel_timer(clear_token=False)
+        self._timer_operator_id = token
+        timer_seconds = self.auction_timer_seconds()
+        self._timer_remaining = timer_seconds
+        if is_new_attempt:
+            item.record_event("start", detail=f"{timer_seconds}s countdown")
+        self._update_timer_context(item)
+        self._render_timer()
+        self._timer_job = self.after(1000, self._timer_tick)
+
+    def _update_timer_context(self, item) -> None:
+        if item.leader:
+            waiting = PLAYER_B if item.leader == PLAYER_A else PLAYER_A
+            self.timer_context_var.set(f"等待 {self.team_name(waiting)} 响应")
+        else:
+            self.timer_context_var.set("等待首次出价")
+
+    def _render_timer(self) -> None:
+        self.timer_var.set(f"{self._timer_remaining:02d}")
+        color = (
+            RED
+            if self._timer_remaining <= 5
+            else ACCENT
+            if self._timer_remaining <= 10
+            else FG
+        )
+        self.timer_value_label.configure(fg=color)
+
+    def _timer_tick(self) -> None:
+        self._timer_job = None
+        state = self.app.state
+        item = state.current_item() if state else None
+        if not item or item.status not in ("pending", "active"):
+            self._cancel_timer()
+            return
+        token = f"{item.operator_id}:{item.attempt}"
+        if token != self._timer_operator_id:
+            self._start_timer(item, force=True)
+            return
+        self._timer_remaining -= 1
+        self._render_timer()
+        if self._timer_remaining <= 0:
+            self._handle_timeout(item)
+            return
+        self._timer_job = self.after(1000, self._timer_tick)
+
+    def _handle_timeout(self, item) -> None:
+        waiting = None
+        if item.leader:
+            waiting = PLAYER_B if item.leader == PLAYER_A else PLAYER_A
+        item.record_event(
+            "timeout",
+            player=waiting,
+            detail=f"{self.auction_timer_seconds()}s no action",
+        )
+        if item.leader:
+            item.award()
+        else:
+            item.mark_unsold()
+        self._advance_completed_item()
+
+    def _cancel_timer(self, *, clear_token: bool = True) -> None:
+        if self._timer_job is not None:
+            self.after_cancel(self._timer_job)
+            self._timer_job = None
+        if clear_token:
+            self._timer_operator_id = None
+        self._timer_remaining = self.auction_timer_seconds()
+        self.timer_var.set(f"{self._timer_remaining:02d}")
+        self.timer_context_var.set("计时暂停")
+
+    def auction_timer_seconds(self) -> int:
+        config = self.app.state.config if self.app.state else self.app.config
+        if config is None:
+            return 20
+        return max(1, int(config.rules.auction_timer_seconds))
 
     def refresh_auction_results(self) -> None:
-        for tree in self.result_trees.values():
-            tree.delete(*tree.get_children())
+        self._result_render_job = None
+        buckets = {PLAYER_A: [], PLAYER_B: [], "unsold": []}
         state = self.app.state
-        counts = {PLAYER_A: 0, PLAYER_B: 0, "unsold": 0}
         if state:
             for item in state.auction_items:
                 if item.status not in ("sold", "unsold"):
@@ -3656,26 +4462,265 @@ class AuctionTab(ttk.Frame):
                 if operator is None:
                     continue
                 key = item.winner if item.status == "sold" and item.winner else "unsold"
-                tree = self.result_trees[key]
-                price = f"{item.final_price} 点" if item.final_price is not None else "流拍"
-                tree.insert(
-                    "",
-                    "end",
-                    iid=item.operator_id,
-                    text=f"  {operator.name}",
-                    image=self.app.assets.avatar(operator, 64),
-                    values=(price, f"R{item.round_index}"),
+                buckets[key].append((item, operator))
+
+        blue_name = self.team_name(PLAYER_A)
+        red_name = self.team_name(PLAYER_B)
+        self.result_title_vars[PLAYER_A].set(
+            f"蓝方 · {blue_name} · {len(buckets[PLAYER_A])}"
+        )
+        self.result_title_vars[PLAYER_B].set(
+            f"红方 · {red_name} · {len(buckets[PLAYER_B])}"
+        )
+        self.result_title_vars["unsold"].set(
+            f"流拍 · {len(buckets['unsold'])}"
+        )
+        for key, canvas in self.result_canvases.items():
+            self._render_result_canvas(key, canvas, buckets[key])
+
+    def _render_result_canvas(self, key: str, canvas: tk.Canvas, entries) -> None:
+        canvas.delete("all")
+        canvas.image_refs = []
+        width = max(150, canvas.winfo_width())
+        padding = 8
+        gap = 8
+        card_height = 90
+        columns = 2 if key != "unsold" and width >= 460 else 1
+        card_width = max(
+            134,
+            (width - padding * 2 - gap * (columns - 1)) // columns,
+        )
+        if not entries:
+            canvas.create_text(
+                width / 2,
+                70,
+                text="暂无记录",
+                fill=MUTED,
+                font=("Microsoft YaHei UI", 11),
+            )
+            content_height = 150
+        else:
+            entries_by_round: dict[int, list[tuple]] = {}
+            for item, operator in entries:
+                entries_by_round.setdefault(item.round_index, []).append(
+                    (item, operator)
                 )
-                counts[key] += 1
-        for key, tree in self.result_trees.items():
-            if counts[key] == 0:
-                tree.insert(
-                    "",
-                    "end",
-                    iid=f"empty-{key}",
-                    text="  暂无记录",
-                    values=("", ""),
+            section_accent = (
+                BLUE
+                if key == PLAYER_A
+                else RED
+                if key == PLAYER_B
+                else MUTED
+            )
+            y_cursor = padding
+            for round_index in sorted(entries_by_round):
+                round_entries = entries_by_round[round_index]
+                header_height = 34
+                canvas.create_rectangle(
+                    padding,
+                    y_cursor,
+                    width - padding,
+                    y_cursor + header_height,
+                    fill=CONTROL_SELECTED,
+                    outline=section_accent,
+                    width=1,
                 )
+                canvas.create_rectangle(
+                    padding,
+                    y_cursor,
+                    padding + 5,
+                    y_cursor + header_height,
+                    fill=section_accent,
+                    outline=section_accent,
+                )
+                canvas.create_text(
+                    padding + 14,
+                    y_cursor + header_height / 2,
+                    anchor="w",
+                    text=f"第 {round_index} 轮",
+                    fill=FG,
+                    font=("Microsoft YaHei UI", 11, "bold"),
+                )
+                canvas.create_text(
+                    width - padding - 10,
+                    y_cursor + header_height / 2,
+                    anchor="e",
+                    text=f"{len(round_entries)} 名",
+                    fill=section_accent,
+                    font=("Microsoft YaHei UI", 9, "bold"),
+                )
+                y_cursor += header_height + gap
+
+                for index, (item, operator) in enumerate(round_entries):
+                    row, column = divmod(index, columns)
+                    x1 = padding + column * (card_width + gap)
+                    y1 = y_cursor + row * (card_height + gap)
+                    x2 = x1 + card_width
+                    y2 = y1 + card_height
+                    tag = f"result-{item.operator_id}"
+                    selected = item.operator_id == self.selected_result_operator_id
+                    background, _foreground = HOST_RARITY_COLORS.get(
+                        operator.rarity,
+                        HOST_RARITY_COLORS[1],
+                    )
+                    accent = AUCTION_RARITY_ACCENTS.get(
+                        operator.rarity,
+                        AUCTION_RARITY_ACCENTS[1],
+                    )
+                    canvas.create_rectangle(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        fill=background,
+                        outline=FOCUS if selected else LINE,
+                        width=3 if selected else 1,
+                        tags=(tag,),
+                    )
+                    canvas.create_rectangle(
+                        x1,
+                        y1,
+                        x1 + 5,
+                        y2,
+                        fill=accent,
+                        outline=accent,
+                        tags=(tag,),
+                    )
+                    avatar = self.app.assets.avatar(operator, 64)
+                    canvas.image_refs.append(avatar)
+                    canvas.create_image(
+                        x1 + 42,
+                        y1 + card_height / 2,
+                        image=avatar,
+                        tags=(tag,),
+                    )
+                    canvas.create_text(
+                        x1 + 82,
+                        y1 + 34,
+                        anchor="w",
+                        text=card_operator_name(
+                            operator.name,
+                            7 if card_width < 230 else 10,
+                        ),
+                        fill=FG,
+                        font=("Microsoft YaHei UI", 13, "bold"),
+                        tags=(tag,),
+                    )
+                    price = (
+                        f"{item.final_price} 点"
+                        if item.final_price is not None
+                        else "流拍"
+                    )
+                    canvas.create_text(
+                        x2 - 10,
+                        y1 + 20,
+                        anchor="ne",
+                        text=price,
+                        fill=accent,
+                        font=("Microsoft YaHei UI", 12, "bold"),
+                        tags=(tag,),
+                    )
+                    if item.attempt > 1:
+                        canvas.create_text(
+                            x1 + 82,
+                            y1 + 65,
+                            anchor="w",
+                            text=f"重新拍卖 × {item.attempt}",
+                            fill=MUTED,
+                            font=("Microsoft YaHei UI", 8, "bold"),
+                            tags=(tag,),
+                        )
+                    canvas.tag_bind(
+                        tag,
+                        "<Button-1>",
+                        lambda _event, operator_id=item.operator_id: self.select_result_operator(
+                            operator_id
+                        ),
+                    )
+                    canvas.tag_bind(
+                        tag,
+                        "<Enter>",
+                        lambda _event, target=canvas: target.configure(cursor="hand2"),
+                    )
+                    canvas.tag_bind(
+                        tag,
+                        "<Leave>",
+                        lambda _event, target=canvas: target.configure(cursor=""),
+                    )
+                rows = math.ceil(len(round_entries) / columns)
+                y_cursor += (
+                    rows * card_height
+                    + max(0, rows - 1) * gap
+                    + 14
+                )
+            content_height = y_cursor + padding
+        canvas.configure(scrollregion=(0, 0, width, content_height))
+        scrollbar = self.result_scrollbars[key]
+        if content_height <= max(1, canvas.winfo_height()):
+            scrollbar.grid_remove()
+            canvas.yview_moveto(0)
+        else:
+            scrollbar.grid()
+
+    def select_result_operator(self, operator_id: str) -> None:
+        self.selected_result_operator_id = operator_id
+        self.reauction_button.configure(
+            state="normal",
+            fg=FG,
+            bg=CONTROL_HOVER,
+        )
+        self.refresh_auction_results()
+
+    def reauction_selected(self) -> None:
+        state = self.app.state
+        operator_id = self.selected_result_operator_id
+        if not state or not operator_id:
+            return
+        index = next(
+            (
+                position
+                for position, item in enumerate(state.auction_items)
+                if item.operator_id == operator_id
+                and item.status in ("sold", "unsold")
+            ),
+            None,
+        )
+        if index is None:
+            return
+        item = state.auction_items[index]
+        operator = self.app.operators.get(operator_id)
+        name = operator.name if operator else operator_id
+        previous = (
+            f"{self.team_name(item.winner)} · {item.final_price} 点"
+            if item.winner
+            else "流拍"
+        )
+        if not messagebox.askyesno(
+            "重新拍卖",
+            f"确定重新拍卖“{name}”吗？\n"
+            f"原结果：{previous}\n\n"
+            "旧出价与时间轴会保留，本次计价将从起拍价重新开始。",
+            parent=self,
+        ):
+            return
+        self._cancel_timer()
+        item.reset_for_reauction()
+        for player in (PLAYER_A, PLAYER_B):
+            state.used_operator_ids[player] = [
+                value
+                for value in state.used_operator_ids.get(player, [])
+                if value != operator_id
+            ]
+        state.current_index = index
+        state.advance()
+        self.selected_result_operator_id = None
+        self.reauction_button.configure(
+            state="disabled",
+            fg=MUTED,
+            bg=SURFACE_RAISED,
+        )
+        self.update_current(reset_timer=True)
+        self.app.ensure_tab("settlement").refresh()
 
     def save_match(self) -> None:
         if not self.app.state:
@@ -3696,21 +4741,6 @@ class AuctionTab(ttk.Frame):
         except OSError as exc:
             self.app.show_error("保存失败", exc)
 
-    def load_match(self) -> None:
-        path = filedialog.askopenfilename(
-            parent=self,
-            title="读取比赛存档",
-            filetypes=[("完整比赛存档", "*.bprace"), ("所有文件", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            state = load_state(Path(path))
-            state.config.validate()
-            self.app.set_state(state)
-        except (RuleError, OSError, ValueError, KeyError) as exc:
-            self.app.show_error("读取失败", exc)
-
     def load_from_state(self) -> None:
         if not self.app.state:
             return
@@ -3722,8 +4752,9 @@ class AuctionTab(ttk.Frame):
             "所有轮次已完成" if state.auction_complete else f"当前等待：第 {next_round} 轮选手文件"
         )
         self.seed_var.set(str(random.SystemRandom().randint(100000, 999999999)))
-        self.a_file_var.set("A 方：未导入")
-        self.b_file_var.set("B 方：未导入")
+        self.refresh_team_labels()
+        self.a_file_var.set(f"{self.team_name(PLAYER_A)}：未导入")
+        self.b_file_var.set(f"{self.team_name(PLAYER_B)}：未导入")
         self.update_current()
 
     def next_round_to_prepare(self) -> int:
@@ -3742,6 +4773,10 @@ class SettlementTab(ttk.Frame):
         self.app = app
         self.a_clear = tk.BooleanVar(value=False)
         self.b_clear = tk.BooleanVar(value=False)
+        self.score_adjustment_vars = {
+            PLAYER_A: tk.StringVar(value="0"),
+            PLAYER_B: tk.StringVar(value="0"),
+        }
         self.result_var = tk.StringVar(value="拍卖结束后，在这里登记实际上场阵容。")
         self.player_canvases: dict[str, tk.Canvas] = {}
         self.player_title_vars = {
@@ -3806,6 +4841,7 @@ class SettlementTab(ttk.Frame):
             style="Panel.TLabel",
             font=("Microsoft YaHei UI", 13, "bold"),
             wraplength=1050,
+            justify="left",
         ).grid(row=0, column=0, sticky="w")
         actions = ttk.Frame(result, style="Panel.TFrame")
         actions.grid(row=0, column=1, sticky="e", padx=(12, 0))
@@ -3816,7 +4852,7 @@ class SettlementTab(ttk.Frame):
         ttk.Button(
             actions,
             text="保存比赛",
-            command=lambda: self.app.ensure_tab("auction").save_match(),
+            command=self.save_match,
         ).pack(
             side="left", padx=4
         )
@@ -3853,18 +4889,37 @@ class SettlementTab(ttk.Frame):
             fg=FG,
             bg=PANEL,
         ).pack(side="left", padx=12)
+        score_controls = tk.Frame(header, bg=PANEL)
+        score_controls.pack(side="right")
         tk.Label(
-            header,
+            score_controls,
+            text="分数修正",
+            font=("Microsoft YaHei UI", 9, "bold"),
+            fg=MUTED,
+            bg=PANEL,
+        ).grid(row=0, column=0, padx=(0, 6))
+        adjustment_entry = ttk.Entry(
+            score_controls,
+            textvariable=self.score_adjustment_vars[player],
+            width=7,
+            justify="center",
+        )
+        adjustment_entry.grid(row=0, column=1, padx=(0, 14))
+        adjustment_entry.bind(
+            "<Return>", lambda _event: self.apply_score_adjustments()
+        )
+        tk.Label(
+            score_controls,
             text="完美通关",
             font=("Microsoft YaHei UI", 10, "bold"),
             fg=MUTED,
             bg=PANEL,
-        ).pack(side="right", padx=(0, 6))
+        ).grid(row=0, column=2, padx=(0, 6))
         ttk.Checkbutton(
-            header,
+            score_controls,
             variable=clear_var,
             command=self.sync_clear,
-        ).pack(side="right")
+        ).grid(row=0, column=3)
 
         canvas = tk.Canvas(
             panel,
@@ -3891,11 +4946,16 @@ class SettlementTab(ttk.Frame):
         if state:
             self.a_clear.set(state.perfect_clear.get(PLAYER_A, False))
             self.b_clear.set(state.perfect_clear.get(PLAYER_B, False))
+            for player in (PLAYER_A, PLAYER_B):
+                value = state.score_adjustments.get(player, 0.0)
+                self.score_adjustment_vars[player].set(f"{value:g}")
             self.player_title_vars[PLAYER_A].set(f"A SIDE · {state.config.player_a_name}")
             self.player_title_vars[PLAYER_B].set(f"B SIDE · {state.config.player_b_name}")
         else:
             self.a_clear.set(False)
             self.b_clear.set(False)
+            self.score_adjustment_vars[PLAYER_A].set("0")
+            self.score_adjustment_vars[PLAYER_B].set("0")
             self.player_title_vars[PLAYER_A].set("A SIDE")
             self.player_title_vars[PLAYER_B].set("B SIDE")
         for player in (PLAYER_A, PLAYER_B):
@@ -3980,7 +5040,7 @@ class SettlementTab(ttk.Frame):
                     y + 33,
                     text=self.app.assets.branch_glyph(branch_id),
                     fill=accent,
-                    font=(self.app.assets.branch_font_family, 26, "bold"),
+                    font=(self.app.assets.branch_font_family, 26),
                 )
                 canvas.create_text(
                     x1 + 65,
@@ -4114,6 +5174,8 @@ class SettlementTab(ttk.Frame):
     def toggle_used(self, player: str, operator_id: str) -> None:
         if not self.app.state:
             return
+        if not self.apply_score_adjustments(show_error=False):
+            return
         used = self.app.state.used_operator_ids.setdefault(player, [])
         if operator_id in used:
             used.remove(operator_id)
@@ -4125,7 +5187,31 @@ class SettlementTab(ttk.Frame):
         if self.app.state:
             self.app.state.perfect_clear[PLAYER_A] = self.a_clear.get()
             self.app.state.perfect_clear[PLAYER_B] = self.b_clear.get()
+            self.apply_score_adjustments(show_error=False)
         self.update_preview()
+
+    def apply_score_adjustments(self, show_error: bool = True) -> bool:
+        if not self.app.state:
+            return True
+        parsed: dict[str, float] = {}
+        try:
+            for player in (PLAYER_A, PLAYER_B):
+                raw = self.score_adjustment_vars[player].get().strip()
+                value = float(raw or "0")
+                if not math.isfinite(value):
+                    raise ValueError
+                parsed[player] = value
+        except ValueError:
+            if show_error:
+                messagebox.showwarning(
+                    "分数修正无效",
+                    "分数修正必须是有限数字，可填写正数、负数或 0。",
+                    parent=self,
+                )
+            return False
+        self.app.state.score_adjustments.update(parsed)
+        self.update_preview()
+        return True
 
     def update_preview(self) -> None:
         state = self.app.state
@@ -4136,22 +5222,25 @@ class SettlementTab(ttk.Frame):
         b = state.calculate_score(PLAYER_B)
         self.result_var.set(
             f"A 方：使用 {a['used_cost']:g} + 未使用折算 {a['bench_weighted_cost']:g} "
-            f"= {a['total']:g} 点    |    "
+            f"+ 修正 {a['adjustment']:+g} = {a['total']:g} 点\n"
             f"B 方：使用 {b['used_cost']:g} + 未使用折算 {b['bench_weighted_cost']:g} "
-            f"= {b['total']:g} 点"
+            f"+ 修正 {b['adjustment']:+g} = {b['total']:g} 点"
         )
 
     def calculate(self) -> None:
         try:
             if not self.app.state or not self.app.state.auction_complete:
                 raise RuleError("必须先完成全部干员的拍卖")
+            if not self.apply_score_adjustments():
+                return
             self.sync_clear()
             result = self.app.state.result()
             winner_text = f"{result['winner']} 方获胜" if result["winner"] else "无胜者 / 平局"
             a, b = result[PLAYER_A], result[PLAYER_B]
             self.result_var.set(
-                f"{winner_text}：{result['reason']}。"
-                f" A 方总消耗 {a['total']:g} 点；B 方总消耗 {b['total']:g} 点。"
+                f"{winner_text}：{result['reason']}。\n"
+                f"A 方：{a['base_total']:g} {a['adjustment']:+g} = {a['total']:g} 点\n"
+                f"B 方：{b['base_total']:g} {b['adjustment']:+g} = {b['total']:g} 点"
             )
         except RuleError as exc:
             self.app.show_error("无法结算", exc)
@@ -4160,6 +5249,8 @@ class SettlementTab(ttk.Frame):
         try:
             if not self.app.state or not self.app.state.auction_complete:
                 raise RuleError("必须先完成全部干员的拍卖")
+            if not self.apply_score_adjustments():
+                return
             self.sync_clear()
             path = filedialog.asksaveasfilename(
                 parent=self,
@@ -4176,3 +5267,9 @@ class SettlementTab(ttk.Frame):
                 messagebox.showinfo("导出成功", f"赛后汇总已保存：\n{path}", parent=self)
         except (RuleError, OSError) as exc:
             self.app.show_error("导出失败", exc)
+
+    def save_match(self) -> None:
+        if not self.apply_score_adjustments():
+            return
+        self.sync_clear()
+        self.app.ensure_tab("auction").save_match()

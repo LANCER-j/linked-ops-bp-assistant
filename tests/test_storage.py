@@ -28,7 +28,7 @@ class StorageRoundTripTests(unittest.TestCase):
             "存档测试",
             "甲方",
             "乙方",
-            MatchRules(),
+            MatchRules(auction_timer_seconds=35),
             global_banned_operator_ids=["global_1", "global_2"],
             global_banned_branches=["召唤师"],
             host_banned_branches={"A": ["领主"], "B": ["术士"]},
@@ -58,8 +58,11 @@ class StorageRoundTripTests(unittest.TestCase):
             winner="A",
             final_price=9,
         )
+        item.record_event("bid", player="A", amount=9)
+        item.record_event("sold", player="A", amount=9)
         state = MatchState(config=config, auction_items=[item], auction_seed=123)
         state.submissions["R1:A"] = submission
+        state.score_adjustments["A"] = -2.5
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -72,6 +75,7 @@ class StorageRoundTripTests(unittest.TestCase):
 
             loaded_config = load_config(config_path)
             self.assertEqual("SAVE-1", loaded_config.match_id)
+            self.assertEqual(35, loaded_config.rules.auction_timer_seconds)
             self.assertTrue(loaded_config.bans_finalized)
             self.assertEqual(["global_1", "global_2"], loaded_config.global_banned_operator_ids)
             self.assertEqual(["ban_1", "ban_2", "ban_3", "ban_4"], loaded_config.host_banned_operator_ids["A"])
@@ -79,6 +83,11 @@ class StorageRoundTripTests(unittest.TestCase):
             loaded_state = load_state(state_path)
             self.assertEqual(9, loaded_state.auction_items[0].final_price)
             self.assertIn("R1:A", loaded_state.submissions)
+            self.assertEqual(-2.5, loaded_state.score_adjustments["A"])
+            self.assertEqual(
+                ["bid", "sold"],
+                [event.action for event in loaded_state.auction_items[0].timeline],
+            )
 
 
 if __name__ == "__main__":
